@@ -9,6 +9,7 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
 import { useSyncExternalStore, useState } from 'react'
 import type { JevRouterSettings } from './config.ts'
 
+/** Client services required by the settings card. */
 export const inject = ['locale', 'settingsScope', 'slots']
 const NS = 'jev-router'
 

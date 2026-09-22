@@ -7,11 +7,18 @@ import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import type { LlmResolvedModelInfo } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-settings'
+import type { ModelSelection as DurableModelSelection } from '@deepseek-ai/dsh-api-session-controller/types'
 import {
   DEFAULT_API_KEY_ENV, DEFAULT_CANDIDATES, defaultSettings, JevRouterSettingsSchema, validateSettings,
   type CandidateModel, type JevRouterSettings,
 } from './config.ts'
 import { boundJevState, classifyWithJev, type JevDecision } from './jev.ts'
+
+declare module '@deepseek-ai/dsh-session/types' {
+  interface SessionEventMap {
+    'model/selection': DurableModelSelection
+  }
+}
 
 export type { CandidateModel, JevRouterSettings } from './config.ts'
 export { DEFAULT_CANDIDATES, DEFAULT_API_KEY_ENV, JevRouterSettingsSchema, defaultSettings, validateSettings } from './config.ts'
@@ -29,21 +36,22 @@ export interface Config extends Partial<JevRouterSettings> {
   endpoint?: string
 }
 
+/** Schemastery schema used by the Cordis loader for optional deployment overrides. */
 export const Config: z<Config> = z.object({
   endpoint: z.string().min(1).default('https://api.typesafe.ai/v1/system-one'),
-  enabled: z.boolean().default(false),
+  enabled: z.boolean(),
   candidateModels: z.array(z.object({
     provider: z.string().min(1), model: z.string().min(1), description: z.string().min(1),
     tier: z.union([z.const('economy'), z.const('capability')]),
-  })).default(DEFAULT_CANDIDATES.map(candidate => ({ ...candidate }))),
-  defaultModel: z.object({ provider: z.string().min(1), model: z.string().min(1) }).default({ provider: 'ctapi', model: 'deepseek-v4-pro-vip' }),
-  routeReasoning: z.boolean().default(true),
-  switchContextLimitTokens: z.union([z.number().step(1).min(1), z.const(null)]).default(32_768),
-  overLimitPolicy: z.union([z.const('keep'), z.const('upgrade_only')]).default('upgrade_only'),
-  minHoldUserTurns: z.number().step(1).min(0).default(2),
-  cacheAware: z.boolean().default(true), jevTimeoutMs: z.number().step(1).min(1).default(2_000),
-  jevMaxStateChars: z.number().step(1).min(1).default(6_000), showDecision: z.boolean().default(true),
-  recordMetrics: z.boolean().default(true), apiKeyEnv: z.string().min(1).default(DEFAULT_API_KEY_ENV),
+  })),
+  defaultModel: z.object({ provider: z.string().min(1), model: z.string().min(1) }),
+  routeReasoning: z.boolean(),
+  switchContextLimitTokens: z.union([z.number().step(1).min(1), z.const(null)]),
+  overLimitPolicy: z.union([z.const('keep'), z.const('upgrade_only')]),
+  minHoldUserTurns: z.number().step(1).min(0),
+  cacheAware: z.boolean(), jevTimeoutMs: z.number().step(1).min(1),
+  jevMaxStateChars: z.number().step(1).min(1), showDecision: z.boolean(),
+  recordMetrics: z.boolean(), apiKeyEnv: z.string().min(1),
 })
 
 interface RouteState {
@@ -92,7 +100,7 @@ function installAgent(ctx: Context, agent: Agent, endpoint: string, scope: { get
     if (state.classifiedTurn !== turn) state.claimed.push(message)
   })
   const disposeSession = ctx.on('session/event', (session, event) => {
-    if (session !== agent.session || String(event.type) !== 'model/selection') return
+    if (session !== agent.session || event.type !== 'model/selection') return
     state.fixed = true
     state.generation++
     state.abort?.abort(new Error('manual model selection'))
