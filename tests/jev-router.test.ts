@@ -12,7 +12,7 @@ describe('jev-router configuration', () => {
     expect(settings.defaultModel).toEqual({ provider: 'ctapi', model: 'deepseek-v4-pro-vip' })
   })
 
-  it('rejects duplicate candidates and a default outside the allow-list', () => {
+  it('rejects duplicate candidates while allowing an independent fallback model', () => {
     const settings = defaultSettings({ provider: 'ctapi', model: 'deepseek-v4-pro-vip' })
     expect(() => validateSettings({
       ...settings,
@@ -21,7 +21,7 @@ describe('jev-router configuration', () => {
     expect(() => validateSettings({
       ...settings,
       defaultModel: { provider: 'other', model: 'missing' },
-    })).toThrow(/one of candidateModels/)
+    })).not.toThrow()
   })
 })
 
@@ -40,8 +40,9 @@ describe('Jev transport', () => {
   })
 
   it('bounds oversized classification material and preserves truncation evidence', () => {
-    const bounded = boundJevState({ input: 'a'.repeat(100), candidates: DEFAULT_CANDIDATES }, 50)
-    expect(JSON.stringify(bounded).length).toBeGreaterThan(0)
+    expect(() => boundJevState({ input: 'a'.repeat(100), candidates: DEFAULT_CANDIDATES }, 50)).toThrow(/too small/)
+    const bounded = boundJevState({ input: 'a'.repeat(100), candidates: DEFAULT_CANDIDATES }, 300)
+    expect(JSON.stringify(bounded).length).toBeLessThanOrEqual(300)
     expect(bounded.input.length).toBeLessThan(100)
     expect((bounded as { truncated?: boolean }).truncated).toBe(true)
   })

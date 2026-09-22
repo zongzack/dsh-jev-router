@@ -46,6 +46,14 @@ function readDecision(value: unknown): JevDecision {
 }
 
 /** Call TypeSafe System One with a bounded total wait and a bearer credential. */
+/**
+ * @param state - bounded routing evidence and candidate allow-list.
+ * @param settings - timeout and routing settings.
+ * @param apiKey - resolved TypeSafe credential.
+ * @param signal - caller-owned cancellation signal.
+ * @param options - endpoint and fetch overrides.
+ * @returns the validated structured route decision.
+ */
 export async function classifyWithJev(
   state: JevState,
   settings: JevRouterSettings,
@@ -90,10 +98,32 @@ export async function classifyWithJev(
 }
 
 /** Keep serialized routing evidence within the configured Unicode budget. */
+/**
+ * @param state - unbounded routing evidence.
+ * @param maxChars - inclusive serialized JSON character budget.
+ * @returns evidence that fits the budget and records truncation when needed.
+ */
 export function boundJevState(state: JevState, maxChars: number): JevState {
-  const encoded = JSON.stringify(state)
-  if (encoded.length <= maxChars) return state
-  const input = state.input.slice(0, Math.max(0, Math.floor(maxChars / 3)))
-  const context = state.context?.map(item => item.slice(0, 256))
-  return { ...state, input, ...(context === undefined ? {} : { context }), truncated: true } as JevState & { truncated: true }
+  if (!Number.isInteger(maxChars) || maxChars <= 0) throw new RangeError('maxChars must be positive')
+  const fits = (candidate: JevState): boolean => JSON.stringify(candidate).length <= maxChars
+  if (fits(state)) return state
+  const candidates = [...state.candidates]
+  const minimal: JevState = { input: '', candidates }
+  if (!fits(minimal)) throw new RangeError('jevMaxStateChars is too small for the configured candidates')
+  let input = state.input
+  let context = state.context === undefined ? undefined : [...state.context]
+  const make = (): JevState => ({
+    input,
+    candidates,
+    ...(context === undefined ? {} : { context }),
+    truncated: true,
+  } as JevState)
+  while (!fits(make())) {
+    if (input.length > 0) input = input.slice(0, Math.max(0, input.length - Math.max(1, Math.ceil(input.length / 10))))
+    else if (context !== undefined && context.length > 0) {
+      context = context.slice(0, -1)
+    } else break
+  }
+  if (!fits(make())) throw new RangeError('jevMaxStateChars cannot contain valid routing evidence')
+  return make()
 }

@@ -11,7 +11,15 @@ pnpm install
 pnpm run build
 ```
 
-在 dsh 的 `cordis.yml` 中将 `@zong/dsh-jev-router` 放入 Web profile 的 `plugins`（或对应 Include 覆盖）即可。Host 入口是包根导出，Web loader 会依据 `package.json` 的 `dsh.client` 声明加载 `./client`。
+开发时可在 dsh 仓库安装本地包：
+
+```sh
+cd /Users/zong/Desktop/Project/GitHub-fork/zong-deepseek-harness
+pnpm add --workspace-root file:/Users/zong/Desktop/Project/deepseek-plugin
+pnpm dsh web --patch /Users/zong/Desktop/Project/deepseek-plugin/examples/jev-router.patch.yml
+```
+
+Host 入口是包根导出，Web loader 会依据 `package.json` 的 `dsh.client` 声明加载 `./client`。示例 patch 在现有 Web profile 上追加插件，不修改 dsh 主循环。
 
 首次安装的 `jev-router` 设置默认关闭。开启后，设置页只保存 `apiKeyEnv` 凭据引用，不会读回或记录 TypeSafe 密钥明文。凭据值应通过 dsh credentials 服务写入，例如 Web Models 页面或部署使用的 credentials provider。
 

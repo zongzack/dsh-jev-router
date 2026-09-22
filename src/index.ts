@@ -13,6 +13,12 @@ import {
 } from './config.ts'
 import { boundJevState, classifyWithJev, type JevDecision } from './jev.ts'
 
+declare module '@deepseek-ai/dsh-session/types' {
+  interface SessionEventMap {
+    'model/selection': { provider: string; model: string; reasoningEffort?: string }
+  }
+}
+
 export type { CandidateModel, JevRouterSettings } from './config.ts'
 export { DEFAULT_CANDIDATES, DEFAULT_API_KEY_ENV, JevRouterSettingsSchema, defaultSettings, validateSettings } from './config.ts'
 export { boundJevState, classifyWithJev } from './jev.ts'
@@ -21,7 +27,7 @@ export type { JevClientOptions, JevDecision, JevState } from './jev.ts'
 /** Cordis package name shared by Host and Client faces. */
 export const name = 'jev-router'
 /** Host services required by the router. */
-export const inject = ['agents', 'credentials', 'llm', 'settings']
+export const inject = ['agentDefaultModel', 'agents', 'credentials', 'llm', 'settings']
 
 /** Optional deployment override for the TypeSafe endpoint, useful for a gateway or test server. */
 export interface Config extends Partial<JevRouterSettings> {
@@ -53,6 +59,9 @@ interface RouteState {
   abort?: AbortController | undefined
   fixed: boolean
   disposed: boolean
+  generation: number
+  currentTurn?: number
+  selection?: { current: ModelSelection | undefined; assembled: ModelSelection | undefined }
 }
 
 function isRootAgent(agent: Agent): boolean {
@@ -62,27 +71,6 @@ function isRootAgent(agent: Agent): boolean {
 function textOf(message: UserMessage): string {
   return message.content.filter((block): block is { type: 'text'; text: string } => block.type === 'text')
     .map(block => block.text).join('\n')
-}
-
-function lastUserText(agent: Agent): string {
-  const event = agent.session.snapshotEvents().findLast(candidate => candidate.type === 'user/message')
-  return event?.type === 'user/message' ? textOf(event.data) : ''
-}
-
-function hasNewerManualSelection(agent: Agent, afterSeq: number): boolean {
-  return agent.session.snapshotEvents().some(event => {
-    const candidate = event as unknown as { type: string; seq: number }
-    return candidate.type === 'model/selection' && candidate.seq > afterSeq
-  })
-}
-
-function latestRequestHeaderSeq(agent: Agent): number {
-  let latest = -1
-  for (const event of agent.session.snapshotEvents()) {
-    const candidate = event as unknown as { type: string; seq: number }
-    if (candidate.type === 'request/header') latest = candidate.seq
-  }
-  return latest
 }
 
 function routeAllowed(candidate: CandidateModel, decision: JevDecision): boolean {
@@ -97,13 +85,24 @@ function choiceFromDecision(decision: JevDecision, candidates: readonly Candidat
 }
 
 /** Install one per-agent route controller on a live main Agent. */
-function installAgent(ctx: Context, agent: Agent, endpoint: string, scope: { get(): JevRouterSettings }): () => void {
+function installAgent(ctx: Context, agent: Agent, endpoint: string, scope: { get(): JevRouterSettings }, registry?: Set<RouteState>): () => void {
   if (!isRootAgent(agent)) return () => {}
-  const state: RouteState = { claimed: [], fixed: false, disposed: false }
+  const state: RouteState = { claimed: [], fixed: false, disposed: false, generation: 0 }
+  registry?.add(state)
   const selection = { current: undefined as ModelSelection | undefined, assembled: undefined as ModelSelection | undefined }
+  state.selection = selection
   const disposeSelection = installModelSelection(agent.ctx, selection)
   const disposeClaimed = agent.ctx.on('agent/inbox/claimed', ({ message, turn }) => {
+    state.currentTurn = turn
     if (state.classifiedTurn !== turn) state.claimed.push(message)
+  })
+  const disposeSession = ctx.on('session/event', (session, event) => {
+    if (session !== agent.session || event.type !== 'model/selection') return
+    state.fixed = true
+    state.generation++
+    state.abort?.abort(new Error('manual model selection'))
+    selection.current = undefined
+    state.route = undefined
   })
   const disposeAssembly = agent.ctx.on('system-prompt/assemble', async (assembly, _context, next) => {
     const settings = scope.get()
@@ -115,18 +114,10 @@ function installAgent(ctx: Context, agent: Agent, endpoint: string, scope: { get
       return next()
     }
     if (state.disposed || state.fixed) return next()
-    const turn = agent.session.snapshotEvents().findLast(event => event.type === 'turn/start')
-    const turnNumber = turn?.type === 'turn/start' ? turn.data.turn : undefined
+    const turnNumber = state.currentTurn
     if (turnNumber === undefined || state.classifiedTurn === turnNumber || state.claimed.length === 0) return next()
     state.classifiedTurn = turnNumber
-    const requestHeaderSeq = latestRequestHeaderSeq(agent)
-    if (hasNewerManualSelection(agent, requestHeaderSeq)) {
-      state.fixed = true
-      selection.current = undefined
-      state.route = undefined
-      state.claimed = []
-      return next()
-    }
+    const generation = ++state.generation
     const controller = new AbortController()
     state.abort = controller
     const linkedAbort = (): void => controller.abort()
@@ -134,28 +125,36 @@ function installAgent(ctx: Context, agent: Agent, endpoint: string, scope: { get
     try {
       const apiKey = await ctx.credentials.resolve(credentialRef(settings.apiKeyEnv))
       if (apiKey === undefined) throw new Error(`credential ${settings.apiKeyEnv} is not configured`)
-      const candidates = settings.candidateModels
+      const candidates: CandidateModel[] = []
+      const hasNonTextInput = state.claimed.some(message => message.content.some(block => block.type !== 'text'))
+      for (const candidate of settings.candidateModels) {
+        try {
+          const info = await ctx.llm.resolveModelInfo(candidate.provider, candidate.model, controller.signal)
+          if (hasNonTextInput && info.inputModalities?.includes('image') !== true) continue
+          candidates.push(candidate)
+        } catch (error: unknown) {
+          void error
+          // Unavailable candidates are omitted from the Jev choice.
+        }
+      }
+      if (candidates.length === 0) throw new Error('none of the configured candidate models is available')
       const stateInput = {
         input: state.claimed.map(textOf).join('\n'),
-        ...(lastUserText(agent) ? { context: [lastUserText(agent)] } : {}),
+        ...(state.claimed.length > 1 ? { context: [textOf(state.claimed.at(-2)!) ] } : {}),
         candidates,
       }
       const decision = await classifyWithJev(boundJevState(stateInput, settings.jevMaxStateChars), settings, apiKey.value, controller.signal, { endpoint })
       const info = await ctx.llm.resolveModelInfo(decision.provider, decision.model, controller.signal)
       const route = choiceFromDecision(decision, candidates, info)
       if (route === undefined) throw new Error('Jev selected a route outside the configured candidate allow-list')
-      if (hasNewerManualSelection(agent, requestHeaderSeq)) {
-        state.fixed = true
-        selection.current = undefined
-        state.route = undefined
-        return next()
-      }
+      if (state.disposed || controller.signal.aborted || generation !== state.generation || !scope.get().enabled) return next()
       selection.current = route
       state.route = route
       state.decision = decision
     } catch (error) {
       if (!controller.signal.aborted) {
         const fallback = agent.session.requestHeader()?.config ?? settings.defaultModel
+        await ctx.llm.resolveModelInfo(fallback.provider, fallback.model, controller.signal)
         selection.current = { provider: fallback.provider, model: fallback.model }
         state.route = selection.current
         state.decision = { provider: fallback.provider, model: fallback.model, reason: `fallback: ${String(error)}` }
@@ -165,49 +164,47 @@ function installAgent(ctx: Context, agent: Agent, endpoint: string, scope: { get
       state.abort = undefined
       state.claimed = []
     }
-    const transformed = await next()
-    if (state.route === undefined) return transformed
-    return { ...transformed, variables: { ...transformed.variables, provider: state.route.provider, model: state.route.model } }
-  }, { prepend: true })
-  const disposeRequest = agent.ctx.on('agent/request', async (_payload, next) => {
-    const resolved = await next()
-    if (!scope.get().enabled || !state.route || state.fixed) return resolved
-    const { reasoningEffort: _ignored, ...withoutEffort } = resolved
-    return {
-      ...withoutEffort,
-      provider: state.route.provider,
-      model: state.route.model,
-      ...(state.route.reasoningEffort === undefined ? {} : { reasoningEffort: state.route.reasoningEffort }),
-    }
-  })
-  const disposeNotice = agent.ctx.on('agent/pre-step', async ({ agent: current }, next) => {
-    const decision = await next()
-    const route = state.route
-    const previous = current.session.requestHeader()?.config
-    if (!route || !previous || (route.provider === previous.provider && route.model === previous.model) || decision.kind === 'reject') return decision
-    return { ...decision, messages: decision.messages }
+    return next()
   }, { prepend: true })
   return () => {
     state.disposed = true
     state.abort?.abort(new Error('jev-router unloaded'))
-    disposeClaimed(); disposeAssembly(); disposeRequest(); disposeNotice(); disposeSelection()
+    registry?.delete(state)
+    disposeClaimed(); disposeSession(); disposeAssembly(); disposeSelection()
   }
 }
 
-/** Host plugin entry. */
+/**
+ * Host plugin entry.
+ * @param ctx - host Cordis context with Agent, model, credentials, and settings services.
+ * @param config - deployment endpoint and optional composition defaults.
+ */
 export function apply(ctx: Context, config: Config = {}): void {
   const initial = defaultSettings(config.defaultModel ?? ctx.agentDefaultModel.currentSelection())
   const base = { ...initial, ...config, candidateModels: config.candidateModels ?? initial.candidateModels, defaultModel: config.defaultModel ?? initial.defaultModel }
   validateSettings(base)
   const settings = ctx.settings.register('jev-router', JevRouterSettingsSchema, { base, validate: validateSettings })
   const installed = new Map<Agent, () => void>()
+  const states = new Set<RouteState>()
   const install = (agent: Agent): void => {
     if (installed.has(agent)) return
-    installed.set(agent, installAgent(ctx, agent, config.endpoint ?? 'https://api.typesafe.ai/v1/system-one', settings))
+    const dispose = installAgent(ctx, agent, config.endpoint ?? 'https://api.typesafe.ai/v1/system-one', settings, states)
+    installed.set(agent, dispose)
   }
   ctx.on('agent/created', ({ agent }) => { install(agent) })
   ctx.on('agent/disposed', ({ agent }) => { installed.get(agent)?.(); installed.delete(agent) })
+  const disposeSettings = settings.watch((next, previous) => {
+    if (previous.enabled && !next.enabled) {
+      for (const state of states) {
+        state.generation++
+        state.abort?.abort(new Error('jev-router disabled'))
+        state.route = undefined
+        if (state.selection !== undefined) state.selection.current = undefined
+      }
+    }
+  })
   ctx.effect(() => () => {
+    disposeSettings()
     for (const dispose of installed.values()) dispose()
     installed.clear()
   }, 'jev-router: agent routes')

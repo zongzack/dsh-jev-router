@@ -45,6 +45,10 @@ export const DEFAULT_CANDIDATES: readonly CandidateModel[] = Object.freeze([
 export const DEFAULT_API_KEY_ENV = 'TYPESAFE_API_KEY'
 
 /** Build the first-run settings from the deployment's current model. */
+/**
+ * @param defaultModel - deployment model used for first-run fallback.
+ * @returns disabled first-run settings.
+ */
 export function defaultSettings(defaultModel: ModelSelection): JevRouterSettings {
   return {
     enabled: false,
@@ -93,6 +97,11 @@ export const JevRouterSettingsSchema: z<JevRouterSettings> = z.object({
 })
 
 /** Validate cross-field rules before settings persistence. */
+/**
+ * @param value - candidate settings to validate.
+ * @returns nothing when the settings are valid.
+ * @throws when a cross-field invariant is violated.
+ */
 export function validateSettings(value: JevRouterSettings): void {
   const seen = new Set<string>()
   for (const candidate of value.candidateModels) {
@@ -104,9 +113,6 @@ export function validateSettings(value: JevRouterSettings): void {
     credentialRef(value.apiKeyEnv)
   } catch (error) {
     throw new TypeError(`apiKeyEnv must be a credential reference: ${String(error)}`, { cause: error })
-  }
-  if (!seen.has(`${value.defaultModel.provider}/${value.defaultModel.model}`)) {
-    throw new TypeError('defaultModel must be one of candidateModels')
   }
   if (value.switchContextLimitTokens !== null && value.switchContextLimitTokens <= 0) {
     throw new TypeError('switchContextLimitTokens must be positive or null')
