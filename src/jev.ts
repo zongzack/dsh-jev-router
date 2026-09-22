@@ -6,6 +6,7 @@ export interface JevState {
   context?: readonly string[]
   candidates: readonly CandidateModel[]
   cache?: Record<string, unknown>
+  truncated?: true
 }
 
 /** Validated Jev routing response. */
@@ -117,7 +118,7 @@ export function boundJevState(state: JevState, maxChars: number): JevState {
     candidates,
     ...(context === undefined ? {} : { context }),
     truncated: true,
-  } as JevState)
+  })
   while (!fits(make())) {
     if (input.length > 0) input = input.slice(0, Math.max(0, input.length - Math.max(1, Math.ceil(input.length / 10))))
     else if (context !== undefined && context.length > 0) {
