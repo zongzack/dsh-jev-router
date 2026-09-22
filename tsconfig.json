@@ -1,0 +1,41 @@
+{
+  "compilerOptions": {
+    "target": "ES2024",
+    "lib": ["ES2024", "DOM"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "skipLibCheck": true,
+    "jsx": "react-jsx",
+    "ignoreDeprecations": "6.0",
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
+    "typeRoots": ["/Users/zong/Desktop/Project/GitHub-fork/zong-deepseek-harness/node_modules/.pnpm/@types+react@18.3.31/node_modules/@types", "/Users/zong/Desktop/Project/GitHub-fork/zong-deepseek-harness/node_modules/.pnpm/@types+node@22.20.0/node_modules/@types"],
+    "baseUrl": ".",
+    "paths": {
+      "@deepseek-ai/cordis": ["/Users/zong/Desktop/Project/GitHub-fork/zong-deepseek-harness/vendor/cordis/lib/types/index.d.ts"],
+      "@deepseek-ai/schemastery": ["/Users/zong/Desktop/Project/GitHub-fork/zong-deepseek-harness/vendor/schemastery/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-agent": ["/Users/zong/Desktop/Project/GitHub-fork/zong-deepseek-harness/packages/core/agent/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-agent/*": ["/Users/zong/Desktop/Project/GitHub-fork/zong-deepseek-harness/packages/core/agent/lib/types/*"],
+      "@deepseek-ai/dsh-agent-default-model": ["/Users/zong/Desktop/Project/GitHub-fork/zong-deepseek-harness/packages/core/agent-default-model/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-llm": ["/Users/zong/Desktop/Project/GitHub-fork/zong-deepseek-harness/packages/llm/llm/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-credentials": ["/Users/zong/Desktop/Project/GitHub-fork/zong-deepseek-harness/packages/credentials/credentials/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-settings": ["/Users/zong/Desktop/Project/GitHub-fork/zong-deepseek-harness/packages/settings/settings/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-settings/*": ["/Users/zong/Desktop/Project/GitHub-fork/zong-deepseek-harness/packages/settings/settings/lib/types/*"],
+      "@deepseek-ai/dsh-client-ui-settings/*": ["/Users/zong/Desktop/Project/GitHub-fork/zong-deepseek-harness/packages/client/ui-settings/lib/types/*"],
+      "@deepseek-ai/dsh-client-ui-settings/client": ["/Users/zong/Desktop/Project/GitHub-fork/zong-deepseek-harness/packages/client/ui-settings/lib/types/client/index.d.ts"],
+      "@deepseek-ai/dsh-client-ui-slots": ["/Users/zong/Desktop/Project/GitHub-fork/zong-deepseek-harness/packages/client/ui-slots/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-client-ui-plugin-manager/*": ["/Users/zong/Desktop/Project/GitHub-fork/zong-deepseek-harness/packages/client/ui-plugin-manager/lib/types/*"],
+      "@deepseek-ai/dsh-client-ui-plugin-manager/client": ["/Users/zong/Desktop/Project/GitHub-fork/zong-deepseek-harness/packages/client/ui-plugin-manager/lib/types/client/index.d.ts"],
+      "@deepseek-ai/dsh-client-ui-renderer/*": ["/Users/zong/Desktop/Project/GitHub-fork/zong-deepseek-harness/packages/client/ui-renderer/lib/types/*"],
+      "@deepseek-ai/dsh-client-ui-renderer/client": ["/Users/zong/Desktop/Project/GitHub-fork/zong-deepseek-harness/packages/client/ui-renderer/lib/types/client/index.d.ts"],
+      "@deepseek-ai/dsh-client-locale/*": ["/Users/zong/Desktop/Project/GitHub-fork/zong-deepseek-harness/packages/client/locale/lib/types/*"],
+      "@deepseek-ai/dsh-client-locale/client": ["/Users/zong/Desktop/Project/GitHub-fork/zong-deepseek-harness/packages/client/locale/lib/types/client/index.d.ts"],
+      "react": ["/Users/zong/Desktop/Project/GitHub-fork/zong-deepseek-harness/node_modules/.pnpm/react@18.3.1/node_modules/react"],
+      "react/*": ["/Users/zong/Desktop/Project/GitHub-fork/zong-deepseek-harness/node_modules/.pnpm/react@18.3.1/node_modules/react/*"]
+    }
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "tests/**/*.ts", "tests/**/*.tsx"]
+}
