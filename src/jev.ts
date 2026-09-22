@@ -18,6 +18,7 @@ export interface JevDecision {
   jevVersion?: string
 }
 
+/** Optional transport overrides used by tests and deployments. */
 export interface JevClientOptions {
   endpoint?: string
   fetch?: typeof globalThis.fetch

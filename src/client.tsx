@@ -111,12 +111,12 @@ export function JevRouterCard(props: CardProps) {
       <label>{props.t('candidates')}<textarea value={candidateText} onChange={event => {
         const text = event.currentTarget.value
         setCandidateDraft(text)
-        try { setDraft(previous => ({ ...previous, candidateModels: JSON.parse(text) as JevRouterSettings['candidateModels'] })) } catch { /* validation reports malformed JSON on save */ }
+        try { setDraft(previous => ({ ...previous, candidateModels: JSON.parse(text) as JevRouterSettings['candidateModels'] })) } catch (error: unknown) { void error /* validation reports malformed JSON on save */ }
       }} /></label>
       <label>{props.t('defaultModel')}<input value={defaultText} onChange={event => {
         const text = event.currentTarget.value
         setDefaultDraft(text)
-        try { setDraft(previous => ({ ...previous, defaultModel: JSON.parse(text) as JevRouterSettings['defaultModel'] })) } catch { /* validation reports malformed JSON on save */ }
+        try { setDraft(previous => ({ ...previous, defaultModel: JSON.parse(text) as JevRouterSettings['defaultModel'] })) } catch (error: unknown) { void error /* validation reports malformed JSON on save */ }
       }} /></label>
       <p>{props.t('dataNotice')}</p>
       <button type="submit" disabled={!state.writable}>{props.t('save')}</button>

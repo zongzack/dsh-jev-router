@@ -27,6 +27,7 @@ export interface JevRouterSettings {
   apiKeyEnv: string
 }
 
+/** First-run routes validated for the initial dsh deployment. */
 export const DEFAULT_CANDIDATES: readonly CandidateModel[] = Object.freeze([
   {
     provider: 'ctapi',
@@ -42,6 +43,7 @@ export const DEFAULT_CANDIDATES: readonly CandidateModel[] = Object.freeze([
   },
 ])
 
+/** Default dsh credential reference used by the settings form. */
 export const DEFAULT_API_KEY_ENV = 'TYPESAFE_API_KEY'
 
 /** Build the first-run settings from the deployment's current model. */

@@ -2,22 +2,16 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type { Agent, ModelSelection } from '@deepseek-ai/dsh-agent'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
-import type { UserMessage } from '@deepseek-ai/dsh-llm'
+import { ReasoningEffortId, type UserMessage } from '@deepseek-ai/dsh-llm'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import type { LlmResolvedModelInfo } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-settings'
 import {
-  defaultSettings, JevRouterSettingsSchema, validateSettings,
+  DEFAULT_API_KEY_ENV, DEFAULT_CANDIDATES, defaultSettings, JevRouterSettingsSchema, validateSettings,
   type CandidateModel, type JevRouterSettings,
 } from './config.ts'
 import { boundJevState, classifyWithJev, type JevDecision } from './jev.ts'
-
-declare module '@deepseek-ai/dsh-session/types' {
-  interface SessionEventMap {
-    'model/selection': { provider: string; model: string; reasoningEffort?: string }
-  }
-}
 
 export type { CandidateModel, JevRouterSettings } from './config.ts'
 export { DEFAULT_CANDIDATES, DEFAULT_API_KEY_ENV, JevRouterSettingsSchema, defaultSettings, validateSettings } from './config.ts'
@@ -30,25 +24,26 @@ export const name = 'jev-router'
 export const inject = ['agentDefaultModel', 'agents', 'credentials', 'llm', 'settings']
 
 /** Optional deployment override for the TypeSafe endpoint, useful for a gateway or test server. */
+/** Configuration accepted by the Host entry. */
 export interface Config extends Partial<JevRouterSettings> {
   endpoint?: string
 }
 
 export const Config: z<Config> = z.object({
   endpoint: z.string().min(1).default('https://api.typesafe.ai/v1/system-one'),
-  enabled: z.boolean(),
+  enabled: z.boolean().default(false),
   candidateModels: z.array(z.object({
     provider: z.string().min(1), model: z.string().min(1), description: z.string().min(1),
     tier: z.union([z.const('economy'), z.const('capability')]),
-  })),
-  defaultModel: z.object({ provider: z.string().min(1), model: z.string().min(1) }),
-  routeReasoning: z.boolean(),
-  switchContextLimitTokens: z.union([z.number().step(1).min(1), z.const(null)]),
-  overLimitPolicy: z.union([z.const('keep'), z.const('upgrade_only')]),
-  minHoldUserTurns: z.number().step(1).min(0),
-  cacheAware: z.boolean(), jevTimeoutMs: z.number().step(1).min(1),
-  jevMaxStateChars: z.number().step(1).min(1), showDecision: z.boolean(),
-  recordMetrics: z.boolean(), apiKeyEnv: z.string().min(1),
+  })).default(DEFAULT_CANDIDATES.map(candidate => ({ ...candidate }))),
+  defaultModel: z.object({ provider: z.string().min(1), model: z.string().min(1) }).default({ provider: 'ctapi', model: 'deepseek-v4-pro-vip' }),
+  routeReasoning: z.boolean().default(true),
+  switchContextLimitTokens: z.union([z.number().step(1).min(1), z.const(null)]).default(32_768),
+  overLimitPolicy: z.union([z.const('keep'), z.const('upgrade_only')]).default('upgrade_only'),
+  minHoldUserTurns: z.number().step(1).min(0).default(2),
+  cacheAware: z.boolean().default(true), jevTimeoutMs: z.number().step(1).min(1).default(2_000),
+  jevMaxStateChars: z.number().step(1).min(1).default(6_000), showDecision: z.boolean().default(true),
+  recordMetrics: z.boolean().default(true), apiKeyEnv: z.string().min(1).default(DEFAULT_API_KEY_ENV),
 })
 
 interface RouteState {
@@ -81,13 +76,13 @@ function choiceFromDecision(decision: JevDecision, candidates: readonly Candidat
   if (!candidates.some(candidate => routeAllowed(candidate, decision))) return undefined
   if (decision.reasoningEffort === undefined) return { provider: decision.provider, model: decision.model }
   if (info.reasoning?.efforts.some(effort => effort.id === decision.reasoningEffort) !== true) return { provider: decision.provider, model: decision.model }
-  return { provider: decision.provider, model: decision.model, reasoningEffort: decision.reasoningEffort as never }
+  return { provider: decision.provider, model: decision.model, reasoningEffort: ReasoningEffortId(decision.reasoningEffort) }
 }
 
 /** Install one per-agent route controller on a live main Agent. */
 function installAgent(ctx: Context, agent: Agent, endpoint: string, scope: { get(): JevRouterSettings }, registry?: Set<RouteState>): () => void {
   if (!isRootAgent(agent)) return () => {}
-  const state: RouteState = { claimed: [], fixed: false, disposed: false, generation: 0 }
+  const state: RouteState = { claimed: [], fixed: agent.session.requestHeader() !== undefined, disposed: false, generation: 0 }
   registry?.add(state)
   const selection = { current: undefined as ModelSelection | undefined, assembled: undefined as ModelSelection | undefined }
   state.selection = selection
@@ -97,7 +92,7 @@ function installAgent(ctx: Context, agent: Agent, endpoint: string, scope: { get
     if (state.classifiedTurn !== turn) state.claimed.push(message)
   })
   const disposeSession = ctx.on('session/event', (session, event) => {
-    if (session !== agent.session || event.type !== 'model/selection') return
+    if (session !== agent.session || String(event.type) !== 'model/selection') return
     state.fixed = true
     state.generation++
     state.abort?.abort(new Error('manual model selection'))
@@ -154,7 +149,11 @@ function installAgent(ctx: Context, agent: Agent, endpoint: string, scope: { get
     } catch (error) {
       if (!controller.signal.aborted) {
         const fallback = agent.session.requestHeader()?.config ?? settings.defaultModel
-        await ctx.llm.resolveModelInfo(fallback.provider, fallback.model, controller.signal)
+        try {
+          await ctx.llm.resolveModelInfo(fallback.provider, fallback.model, controller.signal)
+        } catch (fallbackError: unknown) {
+          throw new Error(`no usable fallback model (${fallback.provider}/${fallback.model}): ${String(fallbackError)}`, { cause: fallbackError })
+        }
         selection.current = { provider: fallback.provider, model: fallback.model }
         state.route = selection.current
         state.decision = { provider: fallback.provider, model: fallback.model, reason: `fallback: ${String(error)}` }
