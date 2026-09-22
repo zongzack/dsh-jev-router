@@ -198,6 +198,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     const dispose = installAgent(ctx, agent, config.endpoint ?? 'https://api.typesafe.ai/v1/system-one', settings, states)
     installed.set(agent, dispose)
   }
+  for (const agent of ctx.agents.list()) install(agent)
   ctx.on('agent/created', ({ agent }) => { install(agent) })
   ctx.on('agent/disposed', ({ agent }) => { installed.get(agent)?.(); installed.delete(agent) })
   const disposeSettings = settings.watch((next, previous) => {
