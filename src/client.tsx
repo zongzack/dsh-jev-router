@@ -24,6 +24,10 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
       | 'contextLimit' | 'contextLimitDisabled' | 'overLimitPolicy' | 'overLimitKeep'
       | 'overLimitUpgradeOnly' | 'cacheAware' | 'advanced' | 'minHoldUserTurns'
       | 'routeReasoning' | 'jevTimeoutMs' | 'jevMaxStateChars' | 'reasoningNotice'
+      | 'showDecision' | 'recordMetrics' | 'metricsNotice' | 'usageUnknown'
+      | 'decisionPolicy' | 'decisionJevVersion' | 'decisionJevLatency' | 'decisionUsage'
+      | 'decisionClassificationUsage'
+      | 'usageInput' | 'usageOutput' | 'usageCacheRead' | 'usageCacheWrite'
       | 'guardNotice' | 'dataNotice' | 'save' | 'saved' | 'unavailable'
       | 'decisionSuggested' | 'decisionActual' | 'decisionInput' | 'decisionReason'
       | 'decisionReasoning' | 'reasoningUnavailable' | 'reasoningDefault' | 'decisionFallback'
@@ -49,6 +53,13 @@ const en = {
   routeReasoning: 'Route reasoning effort when the selected model advertises support',
   jevTimeoutMs: 'Jev timeout (milliseconds)',
   jevMaxStateChars: 'Maximum classification state (Unicode characters)',
+  showDecision: 'Show route decisions in the conversation',
+  recordMetrics: 'Record structured routing metrics',
+  metricsNotice: 'Metrics contain routes, timing, and reported token/cache usage only; prompts, tools, credentials, and costs are not recorded.',
+  usageUnknown: 'unknown',
+  decisionPolicy: 'Policy version', decisionJevVersion: 'Jev version', decisionJevLatency: 'Jev latency', decisionUsage: 'Execution usage',
+  decisionClassificationUsage: 'Classification usage',
+  usageInput: 'input', usageOutput: 'output', usageCacheRead: 'cache read', usageCacheWrite: 'cache write',
   reasoningNotice: 'Reasoning choices come from the live adapter catalog. Unsupported models keep their adapter default.',
   guardNotice: 'Input size covers the full request and is marked as an estimate. Missing cache fields remain unknown, not zero.',
   dataNotice: 'Limited routing material is sent to TypeSafe for classification; conversation history remains in dsh.',
@@ -78,6 +89,13 @@ const zh = {
   routeReasoning: '目标模型明确支持时自动调整思考档位',
   jevTimeoutMs: 'Jev 超时（毫秒）',
   jevMaxStateChars: '分类材料上限（Unicode 字符）',
+  showDecision: '在会话中展示路由决定',
+  recordMetrics: '记录结构化路由指标',
+  metricsNotice: '指标仅包含路线、耗时和已报告的 token/缓存用量；不会记录提示词、工具、凭据或费用。',
+  usageUnknown: '未知',
+  decisionPolicy: '策略版本', decisionJevVersion: 'Jev 版本', decisionJevLatency: 'Jev 耗时', decisionUsage: '执行用量',
+  decisionClassificationUsage: '分类用量',
+  usageInput: '输入', usageOutput: '输出', usageCacheRead: '缓存读取', usageCacheWrite: '缓存写入',
   reasoningNotice: '思考档位来自实时适配器目录；模型未声明支持时保留适配器默认行为。',
   guardNotice: '输入规模覆盖完整请求并明确标为估算；缺失的缓存字段保持“未知”，不会当作零命中。',
   dataNotice: '有限的分类材料会发送到 TypeSafe；完整会话历史仍由 dsh 执行模型接收。',
@@ -122,6 +140,8 @@ export function JevRouterCard(props: CardProps) {
   const routeReasoning = draft.routeReasoning ?? value.routeReasoning
   const jevTimeoutMs = draft.jevTimeoutMs ?? value.jevTimeoutMs
   const jevMaxStateChars = draft.jevMaxStateChars ?? value.jevMaxStateChars
+  const showDecision = draft.showDecision ?? value.showDecision
+  const recordMetrics = draft.recordMetrics ?? value.recordMetrics
   const candidateText = candidateDraft ?? JSON.stringify(value.candidateModels, null, 2)
   const defaultText = defaultDraft ?? JSON.stringify(value.defaultModel, null, 2)
   return (
@@ -148,6 +168,8 @@ export function JevRouterCard(props: CardProps) {
         { op: 'set', path: ['routeReasoning'], value: routeReasoning },
         { op: 'set', path: ['jevTimeoutMs'], value: jevTimeoutMs },
         { op: 'set', path: ['jevMaxStateChars'], value: jevMaxStateChars },
+        { op: 'set', path: ['showDecision'], value: showDecision },
+        { op: 'set', path: ['recordMetrics'], value: recordMetrics },
       ]).then(() => setMessage(props.t('saved')), error => setMessage(String(error)))
     }}>
       <label>
@@ -234,6 +256,26 @@ export function JevRouterCard(props: CardProps) {
         />
         {props.t('cacheAware')}
       </label>
+      <label>
+        <input
+          name="showDecision"
+          type="checkbox"
+          checked={showDecision}
+          disabled={!state.writable}
+          onChange={event => setDraft(previous => ({ ...previous, showDecision: event.currentTarget.checked }))}
+        />
+        {props.t('showDecision')}
+      </label>
+      <label>
+        <input
+          name="recordMetrics"
+          type="checkbox"
+          checked={recordMetrics}
+          disabled={!state.writable}
+          onChange={event => setDraft(previous => ({ ...previous, recordMetrics: event.currentTarget.checked }))}
+        />
+        {props.t('recordMetrics')}
+      </label>
       <details>
         <summary>{props.t('advanced')}</summary>
         <label>
@@ -289,6 +331,7 @@ export function JevRouterCard(props: CardProps) {
       </details>
       <p>{props.t('guardNotice')}</p>
       <p>{props.t('dataNotice')}</p>
+      <p>{props.t('metricsNotice')}</p>
       <button type="submit" disabled={!state.writable}>{props.t('save')}</button>
       {message ? <span role="status">{message}</span> : null}
     </form>
@@ -308,12 +351,17 @@ export function JevRouterDecisionTail(
     <span>{props.t('decisionActual')}: {model(decision.actual)}</span>
     <span>{props.t('decisionInput')}: {decision.inputTokens === null ? '?' : decision.inputTokens}{decision.estimated ? ' (estimated)' : ''}</span>
     <span>{props.t('decisionReason')}: {decision.reason}</span>
+    {decision.policyVersion === undefined ? null : <span>{props.t('decisionPolicy')}: {decision.policyVersion}</span>}
+    {decision.jevVersion === undefined ? null : <span>{props.t('decisionJevVersion')}: {decision.jevVersion}</span>}
+    {decision.classificationMs === undefined ? null : <span>{props.t('decisionJevLatency')}: {decision.classificationMs} ms</span>}
+    {decision.classificationUsage === undefined ? null : <span>{props.t('decisionClassificationUsage')}: {props.t('usageInput')} {decision.classificationUsage.inputTokens ?? props.t('usageUnknown')}, {props.t('usageOutput')} {decision.classificationUsage.outputTokens ?? props.t('usageUnknown')}, {props.t('usageCacheRead')} {decision.classificationUsage.cacheReadTokens ?? props.t('usageUnknown')}, {props.t('usageCacheWrite')} {decision.classificationUsage.cacheWriteTokens ?? props.t('usageUnknown')}</span>}
     <span>{props.t('decisionReasoning')}: {decision.reasoningSupported === false
       ? props.t('reasoningUnavailable')
       : decision.reasoningEffort ?? (decision.reasoningSupported === true
         ? props.t('reasoningDefault')
         : props.t('reasoningUnavailable'))}</span>
     {decision.fallback === undefined ? null : <span>{props.t('decisionFallback')}: {decision.fallback}</span>}
+    {decision.usage === undefined ? null : <span>{props.t('decisionUsage')}: {props.t('usageInput')} {decision.usage.inputTokens ?? props.t('usageUnknown')}, {props.t('usageOutput')} {decision.usage.outputTokens ?? props.t('usageUnknown')}, {props.t('usageCacheRead')} {decision.usage.cacheReadTokens ?? props.t('usageUnknown')}, {props.t('usageCacheWrite')} {decision.usage.cacheWriteTokens ?? props.t('usageUnknown')}</span>}
   </aside>
 }
 

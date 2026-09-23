@@ -30,6 +30,8 @@ describe('Jev router settings card', () => {
     const reasoning = root.findByProps({ name: 'routeReasoning' })
     const timeout = root.findByProps({ name: 'jevTimeoutMs' })
     const budget = root.findByProps({ name: 'jevMaxStateChars' })
+    const showDecision = root.findByProps({ name: 'showDecision' })
+    const recordMetrics = root.findByProps({ name: 'recordMetrics' })
     act(() => {
       limit.props.onChange({ currentTarget: { value: '65536' } })
       policy.props.onChange({ currentTarget: { value: 'keep' } })
@@ -38,6 +40,8 @@ describe('Jev router settings card', () => {
       reasoning.props.onChange({ currentTarget: { checked: false } })
       timeout.props.onChange({ currentTarget: { value: '3500' } })
       budget.props.onChange({ currentTarget: { value: '9000' } })
+      showDecision.props.onChange({ currentTarget: { checked: false } })
+      recordMetrics.props.onChange({ currentTarget: { checked: false } })
     })
     await act(async () => {
       root.findByType('form').props.onSubmit({ preventDefault() {} })
@@ -52,6 +56,8 @@ describe('Jev router settings card', () => {
       { op: 'set', path: ['routeReasoning'], value: false },
       { op: 'set', path: ['jevTimeoutMs'], value: 3_500 },
       { op: 'set', path: ['jevMaxStateChars'], value: 9_000 },
+      { op: 'set', path: ['showDecision'], value: false },
+      { op: 'set', path: ['recordMetrics'], value: false },
     ]))
   })
 })

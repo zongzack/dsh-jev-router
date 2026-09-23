@@ -5,6 +5,8 @@ import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
 
 /** Durable, user-visible outcome of one applied routing decision. */
 export interface JevRouterDecisionView {
+  /** Version of the routing policy that produced this decision. */
+  policyVersion?: string | undefined
   turn: number
   suggested: { provider: string; model: string }
   actual: { provider: string; model: string }
@@ -15,6 +17,25 @@ export interface JevRouterDecisionView {
   reasoningSupported?: boolean | undefined
   fallback?: string | undefined
   jevVersion?: string | undefined
+  /** Wall-clock time spent waiting for the Jev classification request. */
+  classificationMs?: number | undefined
+  /** Usage reported by TypeSafe for the classification request. */
+  classificationUsage?: {
+    inputTokens: number | null
+    outputTokens: number | null
+    totalTokens?: number | null | undefined
+    cacheReadTokens?: number | null | undefined
+    cacheWriteTokens?: number | null | undefined
+  } | undefined
+  /** Usage reported by the actual execution request for this turn. */
+  usage?: {
+    inputTokens: number | null
+    outputTokens: number | null
+    totalTokens?: number | null | undefined
+    cacheReadTokens?: number | null | undefined
+    cacheWriteTokens?: number | null | undefined
+    reasoningTokens?: number | null | undefined
+  } | undefined
 }
 
 /** Client-visible durable mode plus the latest optional decision. */
@@ -42,6 +63,7 @@ const cacheEvidenceSchema = z.discriminatedUnion('status', [
 ])
 
 const decisionViewSchema = z.object({
+  policyVersion: z.string().min(1).optional(),
   turn: z.number().int().nonnegative(),
   suggested: routeSchema,
   actual: routeSchema,
@@ -52,6 +74,22 @@ const decisionViewSchema = z.object({
   reasoningSupported: z.boolean().optional(),
   fallback: z.string().min(1).optional(),
   jevVersion: z.string().min(1).optional(),
+  classificationMs: z.number().nonnegative().optional(),
+  classificationUsage: z.object({
+    inputTokens: z.number().int().nonnegative().nullable(),
+    outputTokens: z.number().int().nonnegative().nullable(),
+    totalTokens: z.number().int().nonnegative().nullable().optional(),
+    cacheReadTokens: z.number().int().nonnegative().nullable().optional(),
+    cacheWriteTokens: z.number().int().nonnegative().nullable().optional(),
+  }).strict().optional(),
+  usage: z.object({
+    inputTokens: z.number().int().nonnegative().nullable(),
+    outputTokens: z.number().int().nonnegative().nullable(),
+    totalTokens: z.number().int().nonnegative().nullable().optional(),
+    cacheReadTokens: z.number().int().nonnegative().nullable().optional(),
+    cacheWriteTokens: z.number().int().nonnegative().nullable().optional(),
+    reasoningTokens: z.number().int().nonnegative().nullable().optional(),
+  }).strict().optional(),
 }).strict()
 
 const historyViewSchema = z.object({
@@ -161,7 +199,7 @@ export function cacheEvidenceFor(
 /** Host-only durable-history projection shared by every routed main session. */
 export const routerHistoryProjectionDefinition = {
   key: 'jevRouterHistory',
-  stateVersion: 3,
+  stateVersion: 4,
   stateSchema: routerHistoryStateSchema,
   init: (header, _inheritedEventCount): RouterHistoryState => ({
     sessionId: String(header.id),
@@ -276,6 +314,23 @@ export const routerHistoryProjectionDefinition = {
         : undefined
       const { pendingDecision: _pending, ...withoutPending } = state
       const usage = event.data.usage
+      const usageView = usage === undefined ? undefined : {
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        ...(usage.totalTokens === undefined ? {} : { totalTokens: usage.totalTokens }),
+        cacheReadTokens: usage.cacheReadTokens ?? null,
+        cacheWriteTokens: usage.cacheWriteTokens ?? null,
+        reasoningTokens: usage.reasoningTokens ?? null,
+      }
+      const existing = pending === undefined
+        && state.latestDecision !== undefined
+        && state.latestDecision.turn === state.openTurn
+        && sameRoute(state.latestDecision.actual, event.data.message.source)
+        ? state.latestDecision
+        : pending
+      const completedDecision = existing === undefined || usageView === undefined
+        ? existing
+        : { ...existing, usage: usageView }
       const evidence: CacheEvidence = usage?.cacheReadTokens === undefined
         ? { status: 'unknown', observedAt: event.time }
         : {
@@ -288,9 +343,9 @@ export const routerHistoryProjectionDefinition = {
         ...withoutPending,
         cacheByRoute: { ...state.cacheByRoute, [key]: evidence },
         lastResponseRouteKey: key,
-        ...(pending === undefined
+        ...(completedDecision === undefined
           ? {}
-          : { latestDecision: pending, view: { ...state.view, decision: pending } }),
+          : { latestDecision: completedDecision, view: { ...state.view, decision: completedDecision } }),
       }
     }
     return state

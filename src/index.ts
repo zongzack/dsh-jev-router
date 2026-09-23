@@ -37,7 +37,7 @@ export {
   DEFAULT_SWITCH_CONTEXT_LIMIT_TOKENS, JevRouterSettingsSchema, defaultSettings, validateSettings,
 } from './config.ts'
 export { boundJevState, classifyWithJev } from './jev.ts'
-export type { JevClientOptions, JevDecision, JevState } from './jev.ts'
+export type { JevClientOptions, JevDecision, JevState, JevUsage } from './jev.ts'
 export { measureCompleteInput } from './input-measurement.ts'
 export type { GuardedRoute, InputMeasurement, RouteGuardInput, RouteGuardReason } from './route-guards.ts'
 export { resolveGuardedRoute } from './route-guards.ts'
@@ -45,6 +45,9 @@ export {
   cacheEvidenceFor, routeKey, routerHistoryProjectionDefinition,
 } from './router-history.ts'
 export type { ActiveCacheEvidence, CacheEvidence, JevRouterHistoryView, RouterHistoryState } from './router-history.ts'
+
+/** Stable identifier written with every route decision for later comparisons. */
+export const ROUTER_POLICY_VERSION = 'jev-router/v1'
 
 /** Return one main session to Auto mode through the durable command lifecycle.
  * @param agent - root Agent whose next user turns should be routed automatically.
@@ -104,11 +107,14 @@ interface RouteState {
   showDecision?: boolean
   recordMetrics?: boolean
   reasoningSupported?: boolean | undefined
+  classificationMs?: number | undefined
+  usage?: DecisionReport['usage'] | undefined
   inFlight?: Promise<void> | undefined
   modeCommands: Map<string, boolean>
 }
 
 interface DecisionReport {
+  policyVersion: string
   turn: number
   suggested: { provider: string; model: string }
   actual: { provider: string; model: string }
@@ -119,6 +125,22 @@ interface DecisionReport {
   reasoningSupported?: boolean
   jevVersion?: string
   fallback?: string
+  classificationMs?: number
+  classificationUsage?: {
+    inputTokens: number | null
+    outputTokens: number | null
+    totalTokens?: number | null | undefined
+    cacheReadTokens?: number | null | undefined
+    cacheWriteTokens?: number | null | undefined
+  }
+  usage?: {
+    inputTokens: number | null
+    outputTokens: number | null
+    totalTokens?: number | null | undefined
+    cacheReadTokens?: number | null | undefined
+    cacheWriteTokens?: number | null | undefined
+    reasoningTokens?: number | null | undefined
+  }
 }
 
 // Protocol policy: short follow-ups may carry a small evidence window.
@@ -236,6 +258,7 @@ function decisionReport(state: RouteState): DecisionReport | undefined {
   if ((state.showDecision !== true && state.recordMetrics !== true)
     || state.decision === undefined || state.route === undefined || state.currentTurn === undefined) return undefined
   return {
+    policyVersion: ROUTER_POLICY_VERSION,
     turn: state.currentTurn,
     suggested: { provider: state.decision.provider, model: state.decision.model },
     actual: { provider: state.route.provider, model: state.route.model },
@@ -246,6 +269,9 @@ function decisionReport(state: RouteState): DecisionReport | undefined {
     ...(state.reasoningSupported === undefined ? {} : { reasoningSupported: state.reasoningSupported }),
     ...(state.decision.jevVersion === undefined ? {} : { jevVersion: state.decision.jevVersion }),
     ...(state.guardReason === 'fallback' ? { fallback: state.decision.reason ?? 'classification failed' } : {}),
+    ...(state.classificationMs === undefined ? {} : { classificationMs: state.classificationMs }),
+    ...(state.decision.classificationUsage === undefined ? {} : { classificationUsage: state.decision.classificationUsage }),
+    ...(state.usage === undefined ? {} : { usage: state.usage }),
   }
 }
 
@@ -375,27 +401,32 @@ function installAgent(
   })
   const handleSessionEvent = (session: typeof agent.session, event: SessionEvent): void => {
     if (session !== agent.session) return
-    if (event.type === 'request/header'
-      && state.decision !== undefined
-      && state.route !== undefined
-      && state.currentTurn !== undefined
-      && state.reportedTurn !== state.currentTurn
-      && sameRoute(event.data.header.config, state.route)) {
-      reportDecision(ctx, agent, state)
-      return
-    }
     if (event.type === 'assistant/message'
       && state.decision !== undefined
       && sameRoute(event.data.message.source, state.route ?? event.data.message.source)) {
-      reportDecision(ctx, agent, state)
+      const usage = event.data.usage
+      state.usage = usage === undefined ? undefined : {
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        ...(usage.totalTokens === undefined ? {} : { totalTokens: usage.totalTokens }),
+        cacheReadTokens: usage.cacheReadTokens ?? null,
+        cacheWriteTokens: usage.cacheWriteTokens ?? null,
+        reasoningTokens: usage.reasoningTokens ?? null,
+      }
+      // Prefer the first assistant settlement that carries usage. If a
+      // provider omits usage for an early step, a later tool continuation may
+      // still report it; defer the decision record until then or turn/end.
+      if (usage !== undefined) reportDecision(ctx, agent, state)
       return
     }
     if (event.type === 'turn/end' && state.currentTurn === event.data.turn) {
+      if (state.decision !== undefined) reportDecision(ctx, agent, state)
       state.currentTurn = undefined
       state.classifiedTurn = undefined
       state.decision = undefined
       state.guardReason = undefined
       state.input = undefined
+      state.usage = undefined
       return
     }
     if (event.type === 'command/run'
@@ -458,6 +489,7 @@ function installAgent(
     state.reportedTurn = undefined
     state.showDecision = settings.showDecision
     state.recordMetrics = settings.recordMetrics
+    state.classificationMs = undefined
     const generation = ++state.generation
     const controller = new AbortController()
     state.abort = controller
@@ -473,6 +505,7 @@ function installAgent(
     _context.signal?.addEventListener('abort', linkedAbort, { once: true })
     let history: RouterHistoryState | undefined
     let activeRoute: ModelSelection | undefined
+    let classificationStarted: number | undefined
     try {
       history = ctx.sessionProjections.stateOf(agent.session, 'jevRouterHistory')
       activeRoute = currentRoute(agent, state, settings)
@@ -526,7 +559,9 @@ function installAgent(
             } }
           : {}),
       }
+      classificationStarted = performance.now()
       const decision = await classifyWithJev(boundJevState(stateInput, settings.jevMaxStateChars), settings, apiKey.value, controller.signal, { endpoint })
+      state.classificationMs = Math.max(0, Math.round(performance.now() - classificationStarted))
       const info = candidateInfo.get(routeKey(decision.provider, decision.model))
       if (info === undefined) throw new Error('Jev selected a route outside the compatible candidate set')
       const choice = choiceFromDecision(decision, candidates, info, activeRoute, settings.routeReasoning)
@@ -548,6 +583,9 @@ function installAgent(
       await persistVisibleDecision(ctx, agent, state, controller.signal, authorizeDecision)
     } catch (error) {
       if (!controller.signal.aborted || timedOut) {
+        if (classificationStarted !== undefined && state.classificationMs === undefined) {
+          state.classificationMs = Math.max(0, Math.round(performance.now() - classificationStarted))
+        }
         const fallback = activeRoute ?? settings.defaultModel
         const fallbackController = new AbortController()
         state.abort = fallbackController

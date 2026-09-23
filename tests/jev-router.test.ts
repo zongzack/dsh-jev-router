@@ -41,9 +41,12 @@ describe('Jev transport', () => {
         model: 'jev-latest',
         reasoning: { enabled: true, options: [{ provider: 'ctapi', model: 'deepseek-v4-pro-vip', efforts: ['small', 'large'] }] },
       })
-      return new Response(JSON.stringify({ result: {
-        provider: 'ctapi', model: 'deepseek-v4-pro-vip', reasoningEffort: 'large', confidence: 0.2, jevVersion: 'jev-test',
-      } }), { status: 200 })
+      return new Response(JSON.stringify({
+        result: {
+          provider: 'ctapi', model: 'deepseek-v4-pro-vip', reasoningEffort: 'large', confidence: 0.2, jevVersion: 'jev-test',
+        },
+        usage: { inputTokens: 21, outputTokens: 3 },
+      }), { status: 200 })
     })
     const settings = defaultSettings({ provider: 'ctapi', model: 'deepseek-v4-pro-vip' })
     await expect(classifyWithJev({
@@ -54,7 +57,12 @@ describe('Jev transport', () => {
         options: [{ provider: 'ctapi', model: 'deepseek-v4-pro-vip', efforts: ['small', 'large'] }],
       },
     }, settings, 'secret', new AbortController().signal, { fetch }))
-      .resolves.toMatchObject({ provider: 'ctapi', model: 'deepseek-v4-pro-vip', reasoningEffort: 'large', confidence: 0.2, jevVersion: 'jev-test' })
+      .resolves.toMatchObject({
+        provider: 'ctapi', model: 'deepseek-v4-pro-vip', reasoningEffort: 'large', confidence: 0.2, jevVersion: 'jev-test',
+        classificationUsage: {
+          inputTokens: 21, outputTokens: 3, cacheReadTokens: null, cacheWriteTokens: null,
+        },
+      })
   })
 
   it('bounds oversized classification material and preserves truncation evidence', () => {
@@ -117,5 +125,15 @@ describe('Jev transport', () => {
     } }), { status: 200 }))
     await expect(classifyWithJev({ input: 'hello', candidates: settings.candidateModels }, settings, 'secret', new AbortController().signal, { fetch }))
       .rejects.toThrow(/invalid reasoning effort/)
+  })
+
+  it('rejects malformed classification usage rather than recording guessed metrics', async () => {
+    const settings = defaultSettings({ provider: 'ctapi', model: 'deepseek-v4-pro-vip' })
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response(JSON.stringify({
+      result: { provider: 'ctapi', model: 'deepseek-v4-pro-vip' },
+      usage: { inputTokens: 'unknown', outputTokens: 1 },
+    }), { status: 200 }))
+    await expect(classifyWithJev({ input: 'hello', candidates: settings.candidateModels }, settings, 'secret', new AbortController().signal, { fetch }))
+      .rejects.toThrow(/inputTokens usage/)
   })
 })

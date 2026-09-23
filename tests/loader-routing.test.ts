@@ -814,4 +814,63 @@ describe('real Loader routing composition', () => {
     expect(ctx.sessionProjections.stateOf(agent.session, 'jevRouterHistory')?.latestDecision)
       .toMatchObject({ jevVersion: 'jev-replay', actual: { model: 'deepseek-v4-flash-vip' } })
   })
+
+  it('keeps decision display and structured metrics independent while preserving routing cache evidence', async () => {
+    vi.stubGlobal('fetch', vi.fn<typeof globalThis.fetch>(async () => new Response(JSON.stringify({
+      result: {
+        provider: 'ctapi', model: 'deepseek-v4-flash-vip', reasoningEffort: 'high', jevVersion: 'jev-live-shape',
+      },
+      usage: { inputTokens: 5, outputTokens: 1 },
+    }), { status: 200 })))
+    const ctx = await loadRouter()
+    const info = vi.spyOn(ctx.logger, 'info')
+    const adapter = new RecordingAdapter()
+    ctx.llm.registerAdapter(['ctapi'], adapter)
+    await ctx.settings.update('jev-router', {
+      enabled: true,
+      switchContextLimitTokens: null,
+      minHoldUserTurns: 0,
+      showDecision: true,
+      recordMetrics: false,
+    })
+    const agent = await ctx.agentLoop.create(SessionId('metrics-switches'), {
+      provider: 'ctapi', model: 'deepseek-v4-pro-vip',
+    })
+
+    agent.followup(createUserMessage({ content: [{ type: 'text', text: 'display only' }], source: { kind: 'user' } }))
+    await agent.whenIdle()
+    expect(ctx.sessionProjections.stateOf(agent.session, 'jevRouterHistory')?.latestDecision).toMatchObject({
+      policyVersion: 'jev-router/v1',
+      jevVersion: 'jev-live-shape',
+      classificationMs: expect.any(Number),
+      classificationUsage: { inputTokens: 5, outputTokens: 1, cacheReadTokens: null },
+      usage: { inputTokens: 11, outputTokens: 1, cacheReadTokens: 7, cacheWriteTokens: null },
+    })
+    expect(info.mock.calls.some(([message]) => String(message).includes('jev-router/decision'))).toBe(false)
+
+    await ctx.settings.update('jev-router', { showDecision: false, recordMetrics: true })
+    agent.followup(createUserMessage({ content: [{ type: 'text', text: 'metrics only' }], source: { kind: 'user' } }))
+    await agent.whenIdle()
+    const metricLine = info.mock.calls.map(([message]) => String(message))
+      .find(message => message.includes('jev-router/decision'))
+    expect(metricLine).toBeDefined()
+    expect(JSON.parse(metricLine ?? '{}')).toMatchObject({
+      event: 'jev-router/decision',
+      policyVersion: 'jev-router/v1',
+      suggested: { model: 'deepseek-v4-flash-vip' },
+      actual: { model: 'deepseek-v4-flash-vip' },
+      classificationUsage: { inputTokens: 5, outputTokens: 1 },
+      usage: { inputTokens: 11, outputTokens: 1, cacheReadTokens: 7 },
+    })
+
+    await ctx.settings.update('jev-router', { showDecision: false, recordMetrics: false })
+    agent.followup(createUserMessage({ content: [{ type: 'text', text: 'route without diagnostics' }], source: { kind: 'user' } }))
+    await agent.whenIdle()
+    expect(adapter.requests).toHaveLength(3)
+    expect(adapter.requests[2]?.model).toBe('deepseek-v4-flash-vip')
+    expect(JevRouter.cacheEvidenceFor(
+      ctx.sessionProjections.stateOf(agent.session, 'jevRouterHistory')!,
+      { provider: 'ctapi', model: 'deepseek-v4-flash-vip' },
+    )).toMatchObject({ status: 'known', cacheReadTokens: 7 })
+  })
 })

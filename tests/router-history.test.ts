@@ -140,6 +140,54 @@ describe('router history projection', () => {
     expect(routerHistoryProjectionDefinition.wire.view(state)).toMatchObject({ mode: 'fixed' })
   })
 
+  it('attaches reported execution usage to the matching persisted decision without inventing cache fields', () => {
+    let state = routerHistoryProjectionDefinition.init({ id: 'metrics' } as never, 0 as never)
+    state = routerHistoryProjectionDefinition.apply(state, event('turn/start', { turn: 1 }, 0))
+    const decision = {
+      policyVersion: 'jev-router/v1',
+      turn: 1,
+      suggested: { provider: 'ctapi', model: 'flash' },
+      actual: { provider: 'ctapi', model: 'flash' },
+      inputTokens: 12,
+      estimated: true,
+      reason: 'suggestion_applied',
+      classificationMs: 25,
+      classificationUsage: { inputTokens: 5, outputTokens: 1, cacheReadTokens: null, cacheWriteTokens: null },
+    }
+    state = routerHistoryProjectionDefinition.apply(state, event('command/run', {
+      commandId: 'metrics-decision' as never,
+      name: JEV_DECISION_COMMAND,
+      args: ` ${encodeDecisionCommandArgs(decision)}`,
+      source: { kind: 'user' },
+    }, 1))
+    state = routerHistoryProjectionDefinition.apply(state, event('command/done', {
+      commandId: 'metrics-decision' as never, kind: 'success',
+    }, 2))
+    state = routerHistoryProjectionDefinition.apply(state, event('request/header', {
+      header: { config: { provider: 'ctapi', model: 'flash' } }, reason: 'initial',
+    }, 3))
+    state = routerHistoryProjectionDefinition.apply(state, event('assistant/message', {
+      turn: 1,
+      step: 1,
+      message: assistant('flash'),
+      stream: [],
+      usage: { inputTokens: 9, outputTokens: 2, cacheReadTokens: 0 },
+    }, 4))
+
+    expect(routerHistoryProjectionDefinition.wire.view(state).decision).toMatchObject({
+      policyVersion: 'jev-router/v1',
+      classificationMs: 25,
+      classificationUsage: { inputTokens: 5, outputTokens: 1, cacheReadTokens: null },
+      usage: {
+        inputTokens: 9,
+        outputTokens: 2,
+        cacheReadTokens: 0,
+        cacheWriteTokens: null,
+        reasoningTokens: null,
+      },
+    })
+  })
+
   it('ignores failed mode commands and replays decisions without process-local state', () => {
     let state = routerHistoryProjectionDefinition.init({ id: 'pure-replay' } as never, 0 as never)
     const initialView = routerHistoryProjectionDefinition.wire.view(state)

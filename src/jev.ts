@@ -30,6 +30,16 @@ export interface JevDecision {
   confidence?: number
   reason?: string
   jevVersion?: string
+  classificationUsage?: JevUsage
+}
+
+/** Token/cache accounting reported by TypeSafe for the classification call. */
+export interface JevUsage {
+  inputTokens: number | null
+  outputTokens: number | null
+  totalTokens?: number | null | undefined
+  cacheReadTokens?: number | null | undefined
+  cacheWriteTokens?: number | null | undefined
 }
 
 /** Optional transport overrides used by tests and deployments. */
@@ -57,6 +67,25 @@ function readDecision(value: unknown): JevDecision {
       || root.confidence < 0 || root.confidence > 1)) {
     throw new Error('Jev returned an invalid confidence')
   }
+  const usageSource = isRecord(value) && isRecord(value.usage)
+    ? value.usage
+    : isRecord(root.usage) ? root.usage : undefined
+  const readCount = (field: string): number | null | undefined => {
+    const count = usageSource?.[field]
+    if (count === undefined) return undefined
+    if (count === null) return null
+    if (typeof count !== 'number' || !Number.isSafeInteger(count) || count < 0) {
+      throw new Error(`Jev returned an invalid ${field} usage value`)
+    }
+    return count
+  }
+  const classificationUsage = usageSource === undefined ? undefined : {
+    inputTokens: readCount('inputTokens') ?? null,
+    outputTokens: readCount('outputTokens') ?? null,
+    ...(readCount('totalTokens') === undefined ? {} : { totalTokens: readCount('totalTokens') }),
+    cacheReadTokens: readCount('cacheReadTokens') ?? null,
+    cacheWriteTokens: readCount('cacheWriteTokens') ?? null,
+  }
   return {
     provider: root.provider,
     model: root.model,
@@ -64,6 +93,7 @@ function readDecision(value: unknown): JevDecision {
     ...(root.confidence === undefined ? {} : { confidence: root.confidence }),
     ...(typeof root.reason === 'string' ? { reason: root.reason } : {}),
     ...(typeof root.jevVersion === 'string' ? { jevVersion: root.jevVersion } : {}),
+    ...(classificationUsage === undefined ? {} : { classificationUsage }),
   }
 }
 

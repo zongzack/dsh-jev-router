@@ -1,6 +1,6 @@
 # dsh Jev Router
 
-这是一个独立的 DeepSeek Harness Cordis 插件，提供 Host 路由和 Web 设置页。插件只接管选择了 Auto 的主会话；关闭、固定模型和子 Agent 都保持 dsh 原有行为。
+这是一个独立的 DeepSeek Harness Cordis 插件，提供 Host 路由和 Web 设置页。插件只接管选择了 Auto 的主会话；关闭、固定模型和子 Agent 都保持 dsh 原有行为。当前策略版本为 `jev-router/v1`。
 
 ## 开发安装
 
@@ -27,6 +27,8 @@ Host 入口是包根导出，Web loader 会依据 `package.json` 的 `dsh.client
 
 高级设置还提供 `routeReasoning`、`jevTimeoutMs` 和 `jevMaxStateChars`，默认分别为开启、2,000 ms 和 6,000 个 Unicode 字符。Jev 在一次分类请求中同时看到候选模型实际声明的思考档位；插件只接受目标适配器目录中的档位，关闭思考路由时保留当前有效选择或适配器默认行为。超时覆盖候选解析和 Jev 网络调用的总等待，材料预算包含 JSON 字段名、结构和全部证据，过大的单条内容会明确标记截断。
 
+`showDecision` 与 `recordMetrics` 是两个相互独立的开关，默认均开启：前者在回合尾部显示建议模型、实际模型、规则原因、策略/Jev 版本、分类耗时、思考档位和实际请求的 token/cache usage；后者把相同的无原文结构化记录写入 dsh logger。关闭展示不会关闭路由，关闭记录也不会删除下一回合所需的短期缓存证据。usage 缺失字段显示为“未知”，不会推算费用或节省。
+
 ## 路由行为
 
 每个由用户输入开始的 turn 在系统提示组装前最多调用一次 TypeSafe System One（`jev-latest`）。Jev 返回的 provider/model 必须匹配设置页白名单；同一 turn 的工具续步和请求重试沿用已经组装的路线。分类失败、超时、缺凭据或非法选择会沿用当前请求路线，没有当前路线时使用 `defaultModel`。
@@ -37,4 +39,16 @@ Host 入口是包根导出，Web loader 会依据 `package.json` 的 `dsh.client
 
 ## 当前票据范围
 
-本版本覆盖逐回合路由、基础候选白名单、默认关闭、凭据引用、设置持久化、长上下文切换守卫、持久化保持计数、缓存证据隔离和可卸载生命周期。完整指标面板与真实收益比较由后续票据补齐。
+本版本覆盖逐回合路由、基础候选白名单、默认关闭、凭据引用、设置持久化、长上下文切换守卫、持久化保持计数、缓存证据隔离、思考强度/恢复、可卸载生命周期和可追溯路由指标。真实 ctapi/TypeSafe 验收与固定 Pro 对比记录见 [docs/live-acceptance.md](docs/live-acceptance.md)。没有凭据或网关不可用时，文档中的项目必须保持“未验证”，不能用测试替身替代真实结果。
+
+## 诊断记录格式
+
+启用 `recordMetrics` 后，每个已完成或失败回合最多写一条 `event: "jev-router/decision"` 的 JSON 记录。记录包含 `policyVersion`、`sessionId`、`turn`、`suggested`、`actual`、`reason`、`fallback`（如有）、`classificationMs`、`classificationUsage`（如 Jev 返回）以及实际执行请求的 `usage`。它不包含用户输入、工具原文或凭据；缓存字段沿用 dsh 的 disjoint 计数语义（`inputTokens` 是未缓存输入，缓存读取/写入单独计数）。
+
+## 安装后快速验收
+
+1. 构建并通过 `examples/jev-router.patch.yml` 加载插件。
+2. 在 dsh credentials 中写入 TypeSafe System One 的凭据，并把设置中的 `apiKeyEnv` 设为引用名；设置页只显示引用和配置状态，不读回密钥。
+3. 保持插件关闭发送一条消息，确认没有 Jev 请求；开启插件并把会话切到 Auto，再发送常规问题和复杂工具任务，确认出站请求模型与会话尾部决定一致。
+4. 分别关闭 `showDecision`、`recordMetrics`，确认只影响对应的界面或 logger；再刷新 profile，确认设置仍持久化。
+5. 记录真实模型与固定 Pro 的对比结果，不把模型占比或单价差写成节省结论。完整表格和命令见 [docs/live-acceptance.md](docs/live-acceptance.md)。
