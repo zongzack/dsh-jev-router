@@ -46,6 +46,12 @@ export const DEFAULT_CANDIDATES: readonly CandidateModel[] = Object.freeze([
 /** Default dsh credential reference used by the settings form. */
 export const DEFAULT_API_KEY_ENV = 'TYPESAFE_API_KEY'
 
+/** Default complete-input threshold above which ordinary route switches stop. */
+export const DEFAULT_SWITCH_CONTEXT_LIMIT_TOKENS = 32_768
+
+/** Default number of completed user turns held after an actual route switch. */
+export const DEFAULT_MIN_HOLD_USER_TURNS = 2
+
 /** Build the first-run settings from the deployment's current model. */
 /**
  * @param defaultModel - deployment model used for first-run fallback.
@@ -57,9 +63,9 @@ export function defaultSettings(defaultModel: ModelSelection): JevRouterSettings
     candidateModels: DEFAULT_CANDIDATES.map(candidate => ({ ...candidate })),
     defaultModel: { ...defaultModel },
     routeReasoning: true,
-    switchContextLimitTokens: 32_768,
+    switchContextLimitTokens: DEFAULT_SWITCH_CONTEXT_LIMIT_TOKENS,
     overLimitPolicy: 'upgrade_only',
-    minHoldUserTurns: 2,
+    minHoldUserTurns: DEFAULT_MIN_HOLD_USER_TURNS,
     cacheAware: true,
     jevTimeoutMs: 2_000,
     jevMaxStateChars: 6_000,
@@ -87,9 +93,9 @@ export const JevRouterSettingsSchema: z<JevRouterSettings> = z.object({
   candidateModels: z.array(candidateSchema).min(1),
   defaultModel: modelSelectionSchema,
   routeReasoning: z.boolean().default(true),
-  switchContextLimitTokens: z.union([z.number().step(1).min(1), z.const(null)]).default(32_768),
+  switchContextLimitTokens: z.union([z.number().step(1).min(1), z.const(null)]).default(DEFAULT_SWITCH_CONTEXT_LIMIT_TOKENS),
   overLimitPolicy: z.union([z.const('keep'), z.const('upgrade_only')]).default('upgrade_only'),
-  minHoldUserTurns: z.number().step(1).min(0).default(2),
+  minHoldUserTurns: z.number().step(1).min(0).default(DEFAULT_MIN_HOLD_USER_TURNS),
   cacheAware: z.boolean().default(true),
   jevTimeoutMs: z.number().step(1).min(1).default(2_000),
   jevMaxStateChars: z.number().step(1).min(1).default(6_000),
@@ -116,7 +122,33 @@ export function validateSettings(value: JevRouterSettings): void {
   } catch (error) {
     throw new TypeError(`apiKeyEnv must be a credential reference: ${String(error)}`, { cause: error })
   }
-  if (value.switchContextLimitTokens !== null && value.switchContextLimitTokens <= 0) {
-    throw new TypeError('switchContextLimitTokens must be positive or null')
+  if (value.switchContextLimitTokens !== null
+    && (!Number.isSafeInteger(value.switchContextLimitTokens) || value.switchContextLimitTokens <= 0)) {
+    throw new TypeError('switchContextLimitTokens must be a positive integer or null')
+  }
+  if (!Number.isSafeInteger(value.minHoldUserTurns) || value.minHoldUserTurns < 0) {
+    throw new TypeError('minHoldUserTurns must be a non-negative integer')
+  }
+  if (!Number.isSafeInteger(value.jevTimeoutMs) || value.jevTimeoutMs <= 0) {
+    throw new TypeError('jevTimeoutMs must be a positive integer')
+  }
+  if (!Number.isSafeInteger(value.jevMaxStateChars) || value.jevMaxStateChars <= 0) {
+    throw new TypeError('jevMaxStateChars must be a positive integer')
+  }
+  const minimumState = JSON.stringify({
+    input: '',
+    candidates: value.candidateModels,
+    ...(value.cacheAware
+      ? {
+          cache: {
+            route: { provider: value.defaultModel.provider, model: value.defaultModel.model },
+            evidence: { status: 'unknown' },
+          },
+        }
+      : {}),
+    truncated: true,
+  }).length
+  if (value.jevMaxStateChars < minimumState) {
+    throw new TypeError(`jevMaxStateChars must be at least ${String(minimumState)} for the configured candidates`)
   }
 }

@@ -1,11 +1,15 @@
 import type { CandidateModel, JevRouterSettings } from './config.ts'
+import type { ActiveCacheEvidence } from './router-history.ts'
 
 /** Structured state sent to TypeSafe; it intentionally contains no credentials. */
 export interface JevState {
   input: string
   context?: readonly string[]
   candidates: readonly CandidateModel[]
-  cache?: Record<string, unknown>
+  cache?: {
+    route: { provider: string; model: string }
+    evidence: ActiveCacheEvidence
+  }
   truncated?: true
 }
 
@@ -110,7 +114,12 @@ export function boundJevState(state: JevState, maxChars: number): JevState {
   const fits = (candidate: JevState): boolean => JSON.stringify(candidate).length <= maxChars
   if (fits(state)) return state
   const candidates = [...state.candidates]
-  const minimal: JevState = { input: '', candidates }
+  const minimal: JevState = {
+    input: '',
+    candidates,
+    ...(state.cache === undefined ? {} : { cache: state.cache }),
+    truncated: true,
+  }
   if (!fits(minimal)) throw new RangeError('jevMaxStateChars is too small for the configured candidates')
   let input = state.input
   let context = state.context === undefined ? undefined : [...state.context]
@@ -118,12 +127,14 @@ export function boundJevState(state: JevState, maxChars: number): JevState {
     input,
     candidates,
     ...(context === undefined ? {} : { context }),
+    ...(state.cache === undefined ? {} : { cache: state.cache }),
     truncated: true,
   })
   while (!fits(make())) {
-    if (input.length > 0) input = input.slice(0, Math.max(0, input.length - Math.max(1, Math.ceil(input.length / 10))))
-    else if (context !== undefined && context.length > 0) {
+    if (context !== undefined && context.length > 0) {
       context = context.slice(0, -1)
+    } else if (input.length > 0) {
+      input = input.slice(0, Math.max(0, input.length - Math.max(1, Math.ceil(input.length / 10))))
     } else break
   }
   if (!fits(make())) throw new RangeError('jevMaxStateChars cannot contain valid routing evidence')

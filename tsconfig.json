@@ -9,6 +9,7 @@
     "exactOptionalPropertyTypes": true,
     "skipLibCheck": true,
     "jsx": "react-jsx",
+    "types": ["node"],
     "ignoreDeprecations": "6.0",
     "allowImportingTsExtensions": true,
     "rewriteRelativeImportExtensions": true

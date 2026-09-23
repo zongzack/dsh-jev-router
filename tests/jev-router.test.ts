@@ -23,6 +23,14 @@ describe('jev-router configuration', () => {
       defaultModel: { provider: 'other', model: 'missing' },
     })).not.toThrow()
   })
+
+  it('rejects non-integer thresholds and hold counts without accepting a partial update', () => {
+    const settings = defaultSettings({ provider: 'ctapi', model: 'deepseek-v4-pro-vip' })
+    expect(() => validateSettings({ ...settings, switchContextLimitTokens: 1.5 })).toThrow(/switchContextLimitTokens/)
+    expect(() => validateSettings({ ...settings, minHoldUserTurns: -1 })).toThrow(/minHoldUserTurns/)
+    expect(() => validateSettings({ ...settings, minHoldUserTurns: 0.5 })).toThrow(/minHoldUserTurns/)
+    expect(() => validateSettings({ ...settings, switchContextLimitTokens: null, minHoldUserTurns: 0 })).not.toThrow()
+  })
 })
 
 describe('Jev transport', () => {
@@ -45,5 +53,20 @@ describe('Jev transport', () => {
     expect(JSON.stringify(bounded).length).toBeLessThanOrEqual(300)
     expect(bounded.input.length).toBeLessThan(100)
     expect((bounded as { truncated?: boolean }).truncated).toBe(true)
+  })
+
+  it('keeps relevant cache evidence inside the total serialized state budget', () => {
+    const bounded = boundJevState({
+      input: 'x'.repeat(300),
+      context: ['older context'.repeat(20)],
+      candidates: DEFAULT_CANDIDATES,
+      cache: {
+        route: { provider: 'ctapi', model: 'deepseek-v4-pro-vip' },
+        evidence: { status: 'known', cacheReadTokens: 0, uncachedInputTokens: 50, observedAt: 123 },
+      },
+    }, 600)
+    expect(JSON.stringify(bounded).length).toBeLessThanOrEqual(600)
+    expect(bounded.cache).toMatchObject({ evidence: { status: 'known', cacheReadTokens: 0 } })
+    expect(bounded.truncated).toBe(true)
   })
 })
