@@ -1,6 +1,9 @@
 import z from '@deepseek-ai/schemastery'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import type { ModelSelection } from '@deepseek-ai/dsh-agent'
+import { DEFAULT_SWITCH_CONTEXT_LIMIT_TOKENS } from './client-defaults.ts'
+
+export { DEFAULT_SWITCH_CONTEXT_LIMIT_TOKENS } from './client-defaults.ts'
 
 /** A user-controlled candidate route and its explicit, non-inferred tier. */
 export interface CandidateModel {
@@ -45,9 +48,6 @@ export const DEFAULT_CANDIDATES: readonly CandidateModel[] = Object.freeze([
 
 /** Default dsh credential reference used by the settings form. */
 export const DEFAULT_API_KEY_ENV = 'TYPESAFE_API_KEY'
-
-/** Default complete-input threshold above which ordinary route switches stop. */
-export const DEFAULT_SWITCH_CONTEXT_LIMIT_TOKENS = 32_768
 
 /** Default number of completed user turns held after an actual route switch. */
 export const DEFAULT_MIN_HOLD_USER_TURNS = 2

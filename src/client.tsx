@@ -12,7 +12,8 @@ import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import type { ISessions } from '@deepseek-ai/dsh-api-session-controller/client'
 import { useSyncExternalStore, useState } from 'react'
 import type { JevRouterHistoryView } from './router-history.ts'
-import { DEFAULT_SWITCH_CONTEXT_LIMIT_TOKENS, type JevRouterSettings } from './config.ts'
+import { DEFAULT_SWITCH_CONTEXT_LIMIT_TOKENS } from './client-defaults.ts'
+import type { JevRouterSettings } from './config.ts'
 
 /** Client services required by the settings card. */
 export const inject = ['locale', 'sessions', 'settingsScope', 'slots']
@@ -429,5 +430,3 @@ export function apply(ctx: ClientContext): void {
     }, JevRouterModeControl))
   })
 }
-
-export default apply

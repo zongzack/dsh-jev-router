@@ -11,15 +11,17 @@ pnpm install
 pnpm run build
 ```
 
-开发时可在 dsh 仓库安装本地包：
+开发时把本地包安装到实际运行 Web 的 `web` profile；仅在 dsh workspace 根目录执行 `pnpm link` 不会把包安装到该 profile：
 
 ```sh
 cd /Users/zong/Desktop/Project/GitHub-fork/zong-deepseek-harness
-pnpm add --workspace-root file:/Users/zong/Desktop/Project/deepseek-plugin
-pnpm dsh web --patch /Users/zong/Desktop/Project/deepseek-plugin/examples/jev-router.patch.yml
+pnpm dsh plugin --profile web add file:/Users/zong/Desktop/Project/deepseek-plugin
+pnpm dsh plugin --profile web why @zong/dsh-jev-router
+pnpm dsh --profile web \
+  --patch /Users/zong/Desktop/Project/deepseek-plugin/examples/jev-router.patch.yml
 ```
 
-Host 入口是包根导出，Web loader 会依据 `package.json` 的 `dsh.client` 声明加载 `./client`。示例 patch 在现有 Web profile 上追加插件，不修改 dsh 主循环。
+Host 入口是包根导出，Web loader 会依据 `package.json` 的 `dsh.client` 声明加载 `./client`。`pnpm run build` 会把浏览器入口打成 dsh Client Modules 所需的 lazy-CJS 注册脚本，并校验 `window.__ModuleLoader__.load(...)` 的插件 id 和 factory；普通 ESM 客户端产物会让同一 combo 中的所有插件一起显示 `import failed`。示例 patch 在现有 Web profile 上追加插件，不修改 dsh 主循环。启动后请使用 dsh 日志输出的完整认证 URL，而不是直接访问裸 `http://127.0.0.1:3080/`。
 
 首次安装的 `jev-router` 设置默认关闭。开启后，设置页只保存 `apiKeyEnv` 凭据引用，不会读回或记录 TypeSafe 密钥明文。凭据值应通过 dsh credentials 服务写入，例如 Web Models 页面或部署使用的 credentials provider。
 
