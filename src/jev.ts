@@ -6,6 +6,15 @@ export interface JevState {
   input: string
   context?: readonly string[]
   candidates: readonly CandidateModel[]
+  reasoning?: {
+    enabled: boolean
+    current?: string
+    options: readonly {
+      provider: string
+      model: string
+      efforts: readonly string[]
+    }[]
+  }
   cache?: {
     route: { provider: string; model: string }
     evidence: ActiveCacheEvidence
@@ -18,6 +27,7 @@ export interface JevDecision {
   provider: string
   model: string
   reasoningEffort?: string
+  confidence?: number
   reason?: string
   jevVersion?: string
 }
@@ -42,10 +52,16 @@ function readDecision(value: unknown): JevDecision {
   if (root.reasoningEffort !== undefined && typeof root.reasoningEffort !== 'string') {
     throw new Error('Jev returned an invalid reasoning effort')
   }
+  if (root.confidence !== undefined
+    && (typeof root.confidence !== 'number' || !Number.isFinite(root.confidence)
+      || root.confidence < 0 || root.confidence > 1)) {
+    throw new Error('Jev returned an invalid confidence')
+  }
   return {
     provider: root.provider,
     model: root.model,
     ...(root.reasoningEffort === undefined ? {} : { reasoningEffort: root.reasoningEffort }),
+    ...(root.confidence === undefined ? {} : { confidence: root.confidence }),
     ...(typeof root.reason === 'string' ? { reason: root.reason } : {}),
     ...(typeof root.jevVersion === 'string' ? { jevVersion: root.jevVersion } : {}),
   }
@@ -92,6 +108,13 @@ export async function classifyWithJev(
             tier: candidate.tier,
           })),
         },
+        ...(state.reasoning === undefined ? {} : {
+          reasoning: {
+            enabled: state.reasoning.enabled,
+            current: state.reasoning.current,
+            options: state.reasoning.options,
+          },
+        }),
       }),
       signal: controller.signal,
     })
@@ -111,32 +134,62 @@ export async function classifyWithJev(
  */
 export function boundJevState(state: JevState, maxChars: number): JevState {
   if (!Number.isInteger(maxChars) || maxChars <= 0) throw new RangeError('maxChars must be positive')
-  const fits = (candidate: JevState): boolean => JSON.stringify(candidate).length <= maxChars
+  const serializedLength = (candidate: JevState): number => Array.from(JSON.stringify(candidate)).length
+  const fits = (candidate: JevState): boolean => serializedLength(candidate) <= maxChars
   if (fits(state)) return state
   const candidates = [...state.candidates]
+  const inputCodePoints = Array.from(state.input)
+  const minimumInput = inputCodePoints.length === 0 ? '' : inputCodePoints[0]!
   const minimal: JevState = {
-    input: '',
+    input: minimumInput,
     candidates,
+    ...(state.reasoning === undefined ? {} : { reasoning: state.reasoning }),
     ...(state.cache === undefined ? {} : { cache: state.cache }),
     truncated: true,
   }
-  if (!fits(minimal)) throw new RangeError('jevMaxStateChars is too small for the configured candidates')
+  if (!fits(minimal)) throw new RangeError('jevMaxStateChars is too small for valid routing evidence including the current input')
   let input = state.input
   let context = state.context === undefined ? undefined : [...state.context]
   const make = (): JevState => ({
     input,
     candidates,
     ...(context === undefined ? {} : { context }),
+    ...(state.reasoning === undefined ? {} : { reasoning: state.reasoning }),
     ...(state.cache === undefined ? {} : { cache: state.cache }),
     truncated: true,
   })
+  const shorten = (value: string, amount: number): string => Array.from(value).slice(0, amount).join('')
   while (!fits(make())) {
-    if (context !== undefined && context.length > 0) {
-      context = context.slice(0, -1)
-    } else if (input.length > 0) {
-      input = input.slice(0, Math.max(0, input.length - Math.max(1, Math.ceil(input.length / 10))))
-    } else break
+    const fields = [input, ...(context ?? [])]
+    let longestIndex = context?.length ? 1 : 0
+    let longestLength = -1
+    for (const [index, value] of fields.entries()) {
+      const length = Array.from(value).length
+      const minimum = index === 0 ? Array.from(minimumInput).length : 0
+      if (length > minimum && length > longestLength) {
+        longestIndex = index
+        longestLength = length
+      }
+    }
+    if (longestLength < 0) break
+    const minimum = longestIndex === 0 ? Array.from(minimumInput).length : 0
+    const nextLength = Math.max(minimum, longestLength - Math.max(1, Math.ceil(longestLength / 10)))
+    if (longestIndex === 0) input = shorten(input, nextLength)
+    else if (context !== undefined) {
+      const contextIndex = longestIndex - 1
+      const shortened = shorten(context[contextIndex] ?? '', nextLength)
+      if (shortened.length === 0) {
+        context.splice(contextIndex, 1)
+        if (context.length === 0) context = undefined
+      } else {
+        context[contextIndex] = shortened
+      }
+    }
   }
-  if (!fits(make())) throw new RangeError('jevMaxStateChars cannot contain valid routing evidence')
+  if (!fits(make())) {
+    // The candidate list and cache marker are the minimum useful evidence. The
+    // explicit error prevents silently sending a state without its allow-list.
+    throw new RangeError('jevMaxStateChars cannot contain valid routing evidence')
+  }
   return make()
 }

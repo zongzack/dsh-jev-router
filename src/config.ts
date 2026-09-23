@@ -135,9 +135,18 @@ export function validateSettings(value: JevRouterSettings): void {
   if (!Number.isSafeInteger(value.jevMaxStateChars) || value.jevMaxStateChars <= 0) {
     throw new TypeError('jevMaxStateChars must be a positive integer')
   }
-  const minimumState = JSON.stringify({
-    input: '',
+  const minimumState = Array.from(JSON.stringify({
+    // A non-empty user turn must retain at least one Unicode code point.
+    input: 'x',
     candidates: value.candidateModels,
+    reasoning: {
+      enabled: value.routeReasoning,
+      options: value.candidateModels.map(candidate => ({
+        provider: candidate.provider,
+        model: candidate.model,
+        efforts: [],
+      })),
+    },
     ...(value.cacheAware
       ? {
           cache: {
@@ -147,7 +156,7 @@ export function validateSettings(value: JevRouterSettings): void {
         }
       : {}),
     truncated: true,
-  }).length
+  })).length
   if (value.jevMaxStateChars < minimumState) {
     throw new TypeError(`jevMaxStateChars must be at least ${String(minimumState)} for the configured candidates`)
   }

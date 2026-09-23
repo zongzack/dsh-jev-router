@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { createAssistantMessage } from '@deepseek-ai/dsh-llm'
 import { SessionSeq, type SessionEvent } from '@deepseek-ai/dsh-session'
-import { cacheEvidenceFor, routerHistoryProjectionDefinition } from '../src/router-history.ts'
+import {
+  cacheEvidenceFor, encodeDecisionCommandArgs, JEV_DECISION_COMMAND, routerHistoryProjectionDefinition,
+} from '../src/router-history.ts'
 
 function event<T extends SessionEvent['type']>(
   type: T,
@@ -92,5 +94,62 @@ describe('router history projection', () => {
     fold(event('turn/start', { turn: 4 }, 8))
     fold(event('turn/end', { turn: 4, reason: { kind: 'completed' } }, 9))
     expect(state.completedUserTurnsSinceSwitch).toBe(2)
+  })
+
+  it('replays mode and Jev version into the client-visible decision', () => {
+    let state = routerHistoryProjectionDefinition.init({} as never, 0 as never)
+    state = routerHistoryProjectionDefinition.apply(state, event('command/run', {
+      commandId: 'auto' as never, name: 'jev-auto', source: { kind: 'user' },
+    }, 0))
+    state = routerHistoryProjectionDefinition.apply(state, event('command/done', {
+      commandId: 'auto' as never, kind: 'success',
+    }, 1))
+    state = routerHistoryProjectionDefinition.apply(state, event('turn/start', { turn: 1 }, 2))
+    const decision = {
+      turn: 1,
+      suggested: { provider: 'ctapi', model: 'pro' },
+      actual: { provider: 'ctapi', model: 'pro' },
+      inputTokens: 12,
+      estimated: true,
+      reason: 'suggestion_applied',
+      jevVersion: 'jev-2026-09',
+    }
+    state = routerHistoryProjectionDefinition.apply(state, event('command/run', {
+      commandId: 'decision' as never,
+      name: JEV_DECISION_COMMAND,
+      args: ` ${encodeDecisionCommandArgs(decision)}`,
+      source: { kind: 'user' },
+    }, 3))
+    state = routerHistoryProjectionDefinition.apply(state, event('command/done', {
+      commandId: 'decision' as never, kind: 'success',
+    }, 4))
+    state = routerHistoryProjectionDefinition.apply(state, event('request/header', {
+      header: { config: { provider: 'ctapi', model: 'pro' } }, reason: 'initial',
+    }, 5))
+    expect(routerHistoryProjectionDefinition.wire.view(state)).toMatchObject({
+      mode: 'auto', decision: { jevVersion: 'jev-2026-09' },
+    })
+
+    state = routerHistoryProjectionDefinition.apply(state, event('command/run', {
+      commandId: 'fixed' as never, name: 'jev-fixed', source: { kind: 'user' },
+    }, 6))
+    expect(routerHistoryProjectionDefinition.wire.view(state)).toMatchObject({ mode: 'auto' })
+    state = routerHistoryProjectionDefinition.apply(state, event('command/done', {
+      commandId: 'fixed' as never, kind: 'success',
+    }, 7))
+    expect(routerHistoryProjectionDefinition.wire.view(state)).toMatchObject({ mode: 'fixed' })
+  })
+
+  it('ignores failed mode commands and replays decisions without process-local state', () => {
+    let state = routerHistoryProjectionDefinition.init({ id: 'pure-replay' } as never, 0 as never)
+    const initialView = routerHistoryProjectionDefinition.wire.view(state)
+    state = routerHistoryProjectionDefinition.apply(state, event('command/run', {
+      commandId: 'failed-auto' as never, name: 'jev-auto', source: { kind: 'user' },
+    }, 0))
+    expect(routerHistoryProjectionDefinition.wire.view(state)).toBe(initialView)
+    state = routerHistoryProjectionDefinition.apply(state, event('command/done', {
+      commandId: 'failed-auto' as never, kind: 'error', text: 'denied',
+    }, 1))
+    expect(routerHistoryProjectionDefinition.wire.view(state)).toBe(initialView)
   })
 })

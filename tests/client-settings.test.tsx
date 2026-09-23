@@ -1,10 +1,10 @@
 import { act, create } from 'react-test-renderer'
 import { describe, expect, it, vi } from 'vitest'
-import { JevRouterCard } from '../src/client.tsx'
+import { JevRouterCard, JevRouterModeControl } from '../src/client.tsx'
 import { defaultSettings } from '../src/config.ts'
 
 describe('Jev router settings card', () => {
-  it('shows common cache guards, folds hold turns under advanced settings, and saves them atomically', async () => {
+  it('shows common guards, folds reasoning and Jev limits under advanced settings, and saves atomically', async () => {
     const value = defaultSettings({ provider: 'ctapi', model: 'deepseek-v4-pro-vip' })
     const mutate = vi.fn<(ops: unknown[]) => Promise<void>>(async () => {})
     const snapshot = { value, writable: true }
@@ -27,11 +27,17 @@ describe('Jev router settings card', () => {
     const policy = root.findByProps({ name: 'overLimitPolicy' })
     const cache = root.findByProps({ name: 'cacheAware' })
     const hold = root.findByProps({ name: 'minHoldUserTurns' })
+    const reasoning = root.findByProps({ name: 'routeReasoning' })
+    const timeout = root.findByProps({ name: 'jevTimeoutMs' })
+    const budget = root.findByProps({ name: 'jevMaxStateChars' })
     act(() => {
       limit.props.onChange({ currentTarget: { value: '65536' } })
       policy.props.onChange({ currentTarget: { value: 'keep' } })
       cache.props.onChange({ currentTarget: { checked: false } })
       hold.props.onChange({ currentTarget: { value: '0' } })
+      reasoning.props.onChange({ currentTarget: { checked: false } })
+      timeout.props.onChange({ currentTarget: { value: '3500' } })
+      budget.props.onChange({ currentTarget: { value: '9000' } })
     })
     await act(async () => {
       root.findByType('form').props.onSubmit({ preventDefault() {} })
@@ -43,6 +49,32 @@ describe('Jev router settings card', () => {
       { op: 'set', path: ['overLimitPolicy'], value: 'keep' },
       { op: 'set', path: ['minHoldUserTurns'], value: 0 },
       { op: 'set', path: ['cacheAware'], value: false },
+      { op: 'set', path: ['routeReasoning'], value: false },
+      { op: 'set', path: ['jevTimeoutMs'], value: 3_500 },
+      { op: 'set', path: ['jevMaxStateChars'], value: 9_000 },
     ]))
+  })
+})
+
+describe('Jev router session mode control', () => {
+  it('toggles both Fixed and Auto through durable mode commands', async () => {
+    const setMode = vi.fn(async () => true)
+    const props = {
+      t: (key: string) => key,
+      useProjection: () => ({ mode: 'fixed' }),
+      setMode,
+    } as unknown as Parameters<typeof JevRouterModeControl>[0]
+    const view = create(<JevRouterModeControl {...props} />)
+    expect(view.root.findByType('button').children).toEqual(['modeFixed'])
+    await act(async () => { view.root.findByType('button').props.onClick() })
+    expect(setMode).toHaveBeenCalledWith('auto')
+
+    const auto = create(<JevRouterModeControl {...{
+      ...props,
+      useProjection: () => ({ mode: 'auto' }),
+    }} />)
+    expect(auto.root.findByType('button').props.disabled).toBe(false)
+    await act(async () => { auto.root.findByType('button').props.onClick() })
+    expect(setMode).toHaveBeenLastCalledWith('fixed')
   })
 })
