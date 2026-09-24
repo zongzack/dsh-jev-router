@@ -1,5 +1,4 @@
 import z from '@deepseek-ai/schemastery'
-import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import type { ModelSelection } from '@deepseek-ai/dsh-agent'
 import { DEFAULT_SWITCH_CONTEXT_LIMIT_TOKENS } from './client-defaults.ts'
 
@@ -27,7 +26,8 @@ export interface JevRouterSettings {
   jevMaxStateChars: number
   showDecision: boolean
   recordMetrics: boolean
-  apiKeyEnv: string
+  /** TypeSafe Jev API key entered directly in the plugin settings. */
+  apiKey: string
 }
 
 /** First-run routes validated for the initial dsh deployment. */
@@ -46,8 +46,8 @@ export const DEFAULT_CANDIDATES: readonly CandidateModel[] = Object.freeze([
   },
 ])
 
-/** Default dsh credential reference used by the settings form. */
-export const DEFAULT_API_KEY_ENV = 'TYPESAFE_API_KEY'
+/** Direct API key default used by the settings form. */
+export const DEFAULT_API_KEY = ''
 
 /** Default number of completed user turns held after an actual route switch. */
 export const DEFAULT_MIN_HOLD_USER_TURNS = 2
@@ -71,7 +71,7 @@ export function defaultSettings(defaultModel: ModelSelection): JevRouterSettings
     jevMaxStateChars: 6_000,
     showDecision: true,
     recordMetrics: true,
-    apiKeyEnv: DEFAULT_API_KEY_ENV,
+    apiKey: DEFAULT_API_KEY,
   }
 }
 
@@ -101,7 +101,7 @@ export const JevRouterSettingsSchema: z<JevRouterSettings> = z.object({
   jevMaxStateChars: z.number().step(1).min(1).default(6_000),
   showDecision: z.boolean().default(true),
   recordMetrics: z.boolean().default(true),
-  apiKeyEnv: z.string().min(1).default(DEFAULT_API_KEY_ENV),
+  apiKey: z.string().default(DEFAULT_API_KEY),
 })
 
 /** Validate cross-field rules before settings persistence. */
@@ -116,11 +116,6 @@ export function validateSettings(value: JevRouterSettings): void {
     const key = `${candidate.provider}/${candidate.model}`
     if (seen.has(key)) throw new TypeError(`candidateModels contains duplicate route "${key}"`)
     seen.add(key)
-  }
-  try {
-    credentialRef(value.apiKeyEnv)
-  } catch (error) {
-    throw new TypeError(`apiKeyEnv must be a credential reference: ${String(error)}`, { cause: error })
   }
   if (value.switchContextLimitTokens !== null
     && (!Number.isSafeInteger(value.switchContextLimitTokens) || value.switchContextLimitTokens <= 0)) {

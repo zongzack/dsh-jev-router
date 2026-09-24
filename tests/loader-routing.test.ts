@@ -123,6 +123,7 @@ async function loadRouter(options: {
     "- name: '@zong/dsh-jev-router'",
     '  config:',
     "    endpoint: 'https://jev.invalid/test'",
+    "    apiKey: 'secret'",
     '',
   ].join('\n'))
 
@@ -288,10 +289,14 @@ describe('real Loader routing composition', () => {
     await agent.whenIdle()
     expect(adapter.requests[0]).toMatchObject({ model: 'deepseek-v4-pro-vip', reasoningEffort: 'max' })
     expect(bodies[0]).toMatchObject({
-      reasoning: { enabled: true },
       state: { reasoning: { options: expect.arrayContaining([
         { provider: 'ctapi', model: 'deepseek-v4-pro-vip', efforts: ['off', 'low', 'high', 'max'] },
       ]) } },
+      questions: { model: { type: 'choice', criteria: {
+        route_7: {
+          provider: 'ctapi', model: 'deepseek-v4-pro-vip', reasoningEffort: 'max',
+        },
+      } } },
     })
 
     agent.followup(createUserMessage({ content: [{ type: 'text', text: 'continue' }], source: { kind: 'user' } }))
@@ -306,7 +311,14 @@ describe('real Loader routing composition', () => {
     await agent.whenIdle()
     expect(adapter.requests[2]?.model).toBe('deepseek-v4-flash-vip')
     expect(adapter.requests[2]?.reasoningEffort).toBe('high')
-    expect(bodies[2]).toMatchObject({ reasoning: { enabled: false } })
+    expect(bodies[2]).toMatchObject({
+      state: { reasoning: { enabled: false } },
+      questions: { model: { criteria: {
+        route_0: {
+          provider: 'ctapi', model: 'deepseek-v4-flash-vip', reasoningEffort: 'adapter-default',
+        },
+      } } },
+    })
   })
 
   it('validates confidence without inventing a confidence routing rule and supports models without reasoning', async () => {
@@ -512,15 +524,14 @@ describe('real Loader routing composition', () => {
       .toMatchObject({ reason: 'fallback', fallback: expect.stringContaining('timed out') })
   })
 
-  it('applies the total timeout while credential resolution is still pending', async () => {
-    const credential = Promise.withResolvers<{ value: string; source: string }>()
+  it('falls back before classification when the direct API key is empty', async () => {
     const fetch = vi.fn<typeof globalThis.fetch>()
     vi.stubGlobal('fetch', fetch)
-    const ctx = await loadRouter({ resolveCredential: () => credential.promise })
+    const ctx = await loadRouter()
     const adapter = new RecordingAdapter()
     ctx.llm.registerAdapter(['ctapi'], adapter)
     await ctx.settings.update('jev-router', {
-      enabled: true, switchContextLimitTokens: null, minHoldUserTurns: 0, jevTimeoutMs: 10, showDecision: true,
+      enabled: true, apiKey: '', switchContextLimitTokens: null, minHoldUserTurns: 0, jevTimeoutMs: 10, showDecision: true,
     })
     const agent = await ctx.agentLoop.create(SessionId('credential-timeout'), {
       provider: 'ctapi', model: 'deepseek-v4-pro-vip',
@@ -531,17 +542,18 @@ describe('real Loader routing composition', () => {
     expect(fetch).not.toHaveBeenCalled()
     expect(adapter.requests[0]?.model).toBe('deepseek-v4-pro-vip')
     expect(ctx.sessionProjections.stateOf(agent.session, 'jevRouterHistory')?.latestDecision)
-      .toMatchObject({ reason: 'fallback', fallback: expect.stringContaining('timed out') })
+      .toMatchObject({ reason: 'fallback', fallback: expect.stringContaining('not configured') })
   })
 
   it('keeps the active first-turn route when it differs from the configured fallback', async () => {
     const fetch = vi.fn<typeof globalThis.fetch>()
     vi.stubGlobal('fetch', fetch)
-    const ctx = await loadRouter({ resolveCredential: () => Promise.resolve(undefined) })
+    const ctx = await loadRouter()
     const adapter = new RecordingAdapter()
     ctx.llm.registerAdapter(['ctapi'], adapter)
     await ctx.settings.update('jev-router', {
       enabled: true,
+      apiKey: '',
       defaultModel: { provider: 'ctapi', model: 'deepseek-v4-flash-vip' },
       switchContextLimitTokens: null,
       minHoldUserTurns: 0,
@@ -671,8 +683,7 @@ describe('real Loader routing composition', () => {
     expect(ctx.sessionProjections.stateOf(restored.agent.session, 'jevRouterHistory')?.mode).toBe('fixed')
   })
 
-  it('replays an Auto session without a credential and falls back to its recorded route', async () => {
-    let credentialAvailable = true
+  it('replays an Auto session without an API key and falls back to its recorded route', async () => {
     let classifications = 0
     vi.stubGlobal('fetch', vi.fn<typeof globalThis.fetch>(async () => {
       classifications++
@@ -680,11 +691,7 @@ describe('real Loader routing composition', () => {
         provider: 'ctapi', model: 'deepseek-v4-flash-vip', reasoningEffort: 'high',
       } }), { status: 200 })
     }))
-    const ctx = await loadRouter({
-      resolveCredential: () => Promise.resolve(credentialAvailable
-        ? { value: 'secret', source: 'test' }
-        : undefined),
-    })
+    const ctx = await loadRouter()
     const adapter = new RecordingAdapter()
     ctx.llm.registerAdapter(['ctapi'], adapter)
     await ctx.settings.update('jev-router', {
@@ -696,7 +703,7 @@ describe('real Loader routing composition', () => {
     source.followup(createUserMessage({ content: [{ type: 'text', text: 'establish route' }], source: { kind: 'user' } }))
     await source.whenIdle()
     const seed = source.session.snapshotEvents() as readonly SessionEvent[]
-    credentialAvailable = false
+    await ctx.settings.update('jev-router', { apiKey: '' })
 
     const restored = await ctx.agents.create({
       sessionId: SessionId('missing-key-restored'),

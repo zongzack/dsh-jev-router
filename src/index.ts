@@ -3,7 +3,6 @@ import z from '@deepseek-ai/schemastery'
 import type { Agent, ModelSelection } from '@deepseek-ai/dsh-agent'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import { ReasoningEffortId, type ContentBlock, type Message, type UserMessage } from '@deepseek-ai/dsh-llm'
-import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import type { LlmResolvedModelInfo } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-settings'
@@ -14,10 +13,10 @@ import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { CommandDefinitionId } from '@deepseek-ai/dsh-commands/brand'
 import type {} from '@deepseek-ai/dsh-commands'
 import {
-  DEFAULT_API_KEY_ENV, DEFAULT_CANDIDATES, defaultSettings, JevRouterSettingsSchema, validateSettings,
+  DEFAULT_API_KEY, DEFAULT_CANDIDATES, defaultSettings, JevRouterSettingsSchema, validateSettings,
   type CandidateModel, type JevRouterSettings,
 } from './config.ts'
-import { boundJevState, classifyWithJev, type JevDecision } from './jev.ts'
+import { boundJevState, classifyWithJev, DEFAULT_JEV_ENDPOINT, type JevDecision } from './jev.ts'
 import { measureCompleteInput } from './input-measurement.ts'
 import { resolveGuardedRoute, type InputMeasurement, type RouteGuardReason } from './route-guards.ts'
 import {
@@ -33,10 +32,10 @@ declare module '@deepseek-ai/dsh-session/types' {
 
 export type { CandidateModel, JevRouterSettings } from './config.ts'
 export {
-  DEFAULT_API_KEY_ENV, DEFAULT_CANDIDATES, DEFAULT_MIN_HOLD_USER_TURNS,
+  DEFAULT_API_KEY, DEFAULT_CANDIDATES, DEFAULT_MIN_HOLD_USER_TURNS,
   DEFAULT_SWITCH_CONTEXT_LIMIT_TOKENS, JevRouterSettingsSchema, defaultSettings, validateSettings,
 } from './config.ts'
-export { boundJevState, classifyWithJev } from './jev.ts'
+export { boundJevState, classifyWithJev, DEFAULT_JEV_ENDPOINT } from './jev.ts'
 export type { JevClientOptions, JevDecision, JevState, JevUsage } from './jev.ts'
 export { measureCompleteInput } from './input-measurement.ts'
 export type { GuardedRoute, InputMeasurement, RouteGuardInput, RouteGuardReason } from './route-guards.ts'
@@ -63,7 +62,7 @@ export async function enableAutoRouting(agent: Agent): Promise<void> {
 export const name = 'jev-router'
 /** Host services required by the router. */
 export const inject = [
-  'agentDefaultModel', 'agents', 'commands', 'credentials', 'llm', 'sessionProjections', 'settings', 'tokenMeter',
+  'agentDefaultModel', 'agents', 'commands', 'llm', 'sessionProjections', 'settings', 'tokenMeter',
 ]
 
 /** Optional deployment override for the TypeSafe endpoint, useful for a gateway or test server. */
@@ -74,7 +73,7 @@ export interface Config extends Partial<JevRouterSettings> {
 
 /** Schemastery schema used by the Cordis loader for optional deployment overrides. */
 export const Config: z<Config> = z.object({
-  endpoint: z.string().min(1).default('https://api.typesafe.ai/v1/system-one'),
+  endpoint: z.string().min(1).default(DEFAULT_JEV_ENDPOINT),
   enabled: z.boolean(),
   candidateModels: z.array(z.object({
     provider: z.string().min(1), model: z.string().min(1), description: z.string().min(1),
@@ -87,7 +86,7 @@ export const Config: z<Config> = z.object({
   minHoldUserTurns: z.number().step(1).min(0),
   cacheAware: z.boolean(), jevTimeoutMs: z.number().step(1).min(1),
   jevMaxStateChars: z.number().step(1).min(1), showDecision: z.boolean(),
-  recordMetrics: z.boolean(), apiKeyEnv: z.string().min(1),
+  recordMetrics: z.boolean(), apiKey: z.string(),
 })
 
 interface RouteState {
@@ -509,11 +508,8 @@ function installAgent(
     try {
       history = ctx.sessionProjections.stateOf(agent.session, 'jevRouterHistory')
       activeRoute = currentRoute(agent, state, settings)
-      const apiKey = await settleWithAbort(
-        ctx.credentials.resolve(credentialRef(settings.apiKeyEnv)),
-        controller.signal,
-      )
-      if (apiKey === undefined) throw new Error(`credential ${settings.apiKeyEnv} is not configured`)
+      const apiKey = settings.apiKey.trim()
+      if (apiKey.length === 0) throw new Error('Jev API key is not configured')
       const input = measureCompleteInput(ctx.tokenMeter, agent.session, assembly, state.claimed, activeRoute)
       state.input = input
       const candidates: CandidateModel[] = []
@@ -560,7 +556,7 @@ function installAgent(
           : {}),
       }
       classificationStarted = performance.now()
-      const decision = await classifyWithJev(boundJevState(stateInput, settings.jevMaxStateChars), settings, apiKey.value, controller.signal, { endpoint })
+      const decision = await classifyWithJev(boundJevState(stateInput, settings.jevMaxStateChars), settings, apiKey, controller.signal, { endpoint })
       state.classificationMs = Math.max(0, Math.round(performance.now() - classificationStarted))
       const info = candidateInfo.get(routeKey(decision.provider, decision.model))
       if (info === undefined) throw new Error('Jev selected a route outside the compatible candidate set')
@@ -634,7 +630,7 @@ function installAgent(
 
 /**
  * Host plugin entry.
- * @param ctx - host Cordis context with Agent, model, credentials, and settings services.
+ * @param ctx - host Cordis context with Agent, model, and settings services.
  * @param config - deployment endpoint and optional composition defaults.
  */
 export function apply(ctx: Context, config: Config = {}): void {
@@ -696,7 +692,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     const dispose = installAgent(
       ctx,
       agent,
-      config.endpoint ?? 'https://api.typesafe.ai/v1/system-one',
+      config.endpoint ?? DEFAULT_JEV_ENDPOINT,
       settings,
       defaultFixed || !settings.get().enabled,
       rawInput => {

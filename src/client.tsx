@@ -1,5 +1,6 @@
 /** Browser half: a small configuration card over the Host-owned settings scope. */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/dsh-api-remotes/client'
 import type { SettingsScope } from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-plugin-manager/client'
@@ -10,18 +11,19 @@ import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-chat/client'
 import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import type { ISessions } from '@deepseek-ai/dsh-api-session-controller/client'
-import { useSyncExternalStore, useState } from 'react'
+import type { ModelCatalog, ModelCatalogModel, ModelProviderGroup } from '@deepseek-ai/dsh-api-session-controller/types'
+import { useEffect, useSyncExternalStore, useState } from 'react'
 import type { JevRouterHistoryView } from './router-history.ts'
 import { DEFAULT_SWITCH_CONTEXT_LIMIT_TOKENS } from './client-defaults.ts'
 import type { JevRouterSettings } from './config.ts'
 
 /** Client services required by the settings card. */
-export const inject = ['locale', 'sessions', 'settingsScope', 'slots']
+export const inject = ['locale', 'remote', 'remote.session', 'sessions', 'settingsScope', 'slots']
 const NS = 'jev-router'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
-    'jev-router': 'title' | 'summary' | 'enabled' | 'apiKeyEnv' | 'candidates' | 'defaultModel'
+    'jev-router': 'title' | 'summary' | 'enabled' | 'apiKey' | 'candidates' | 'defaultModel'
       | 'contextLimit' | 'contextLimitDisabled' | 'overLimitPolicy' | 'overLimitKeep'
       | 'overLimitUpgradeOnly' | 'cacheAware' | 'advanced' | 'minHoldUserTurns'
       | 'routeReasoning' | 'jevTimeoutMs' | 'jevMaxStateChars' | 'reasoningNotice'
@@ -32,7 +34,10 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
       | 'guardNotice' | 'dataNotice' | 'save' | 'saved' | 'unavailable'
       | 'decisionSuggested' | 'decisionActual' | 'decisionInput' | 'decisionReason'
       | 'decisionReasoning' | 'reasoningUnavailable' | 'reasoningDefault' | 'decisionFallback'
-      | 'modeAuto' | 'modeFixed' | 'modeSwitchError'
+      | 'modeAuto' | 'modeFixed' | 'modeSwitchError' | 'catalogLoading' | 'catalogEmpty'
+      | 'catalogError' | 'catalogRetry' | 'catalogPartial' | 'candidateHint'
+      | 'candidateTier' | 'candidateDescription' | 'tierEconomy' | 'tierCapability'
+      | 'modelMissing' | 'removeCandidate' | 'addCandidate'
   }
 }
 
@@ -40,9 +45,9 @@ const en = {
   title: 'Jev automatic routing',
   summary: 'Choose a model per user turn with TypeSafe Jev.',
   enabled: 'Enable automatic routing',
-  apiKeyEnv: 'TypeSafe credential reference',
-  candidates: 'Candidate models (provider/model JSON)',
-  defaultModel: 'Default fallback (provider/model JSON)',
+  apiKey: 'TypeSafe Jev API key',
+  candidates: 'Candidate models',
+  defaultModel: 'Default fallback model',
   contextLimit: 'Free-switch input limit (estimated tokens)',
   contextLimitDisabled: 'Disable context limit',
   overLimitPolicy: 'Above-limit behavior',
@@ -69,16 +74,22 @@ const en = {
   unavailable: 'Settings are unavailable in this profile.',
   decisionSuggested: 'Suggested model', decisionActual: 'Actual model', decisionInput: 'Input size', decisionReason: 'Routing rule',
   decisionReasoning: 'Reasoning effort', reasoningUnavailable: 'Unavailable for this model', reasoningDefault: 'Adapter default', decisionFallback: 'Fallback',
-  modeAuto: 'Auto', modeFixed: 'Fixed', modeSwitchError: 'Could not change the routing mode',
+  modeAuto: 'Auto model', modeFixed: 'Fixed model', modeSwitchError: 'Could not change the routing mode',
+  catalogLoading: 'Loading configured models…', catalogEmpty: 'No configured models are available. Add a model under Models settings, then retry.',
+  catalogError: 'Could not load configured models', catalogRetry: 'Retry', catalogPartial: 'Some model providers could not be loaded.',
+  candidateHint: 'Models come from Models settings. Tier and description tell Jev when each model should be used.',
+  candidateTier: 'Routing tier', candidateDescription: 'Routing description',
+  tierEconomy: 'Economy', tierCapability: 'Capability', modelMissing: 'Not present in Models settings',
+  removeCandidate: 'Remove candidate', addCandidate: 'Add candidate',
 } as const
 
 const zh = {
   title: 'Jev 自动路由',
   summary: '使用 TypeSafe Jev 为每个用户回合选择模型。',
   enabled: '开启自动路由',
-  apiKeyEnv: 'TypeSafe 凭据引用',
-  candidates: '候选模型（provider/model JSON）',
-  defaultModel: '默认回退模型（provider/model JSON）',
+  apiKey: 'TypeSafe Jev API Key',
+  candidates: '候选模型',
+  defaultModel: '默认回退模型',
   contextLimit: '自由切换输入上限（估算 token）',
   contextLimitDisabled: '禁用上下文阈值',
   overLimitPolicy: '超限行为',
@@ -105,14 +116,39 @@ const zh = {
   unavailable: '此 profile 暂无设置服务。',
   decisionSuggested: '建议模型', decisionActual: '实际模型', decisionInput: '输入规模', decisionReason: '路由规则',
   decisionReasoning: '思考档位', reasoningUnavailable: '该模型不支持调整', reasoningDefault: '适配器默认', decisionFallback: '回退原因',
-  modeAuto: '自动', modeFixed: '固定', modeSwitchError: '无法切换路由模式',
+  modeAuto: '自动模型', modeFixed: '固定模型', modeSwitchError: '无法切换路由模式',
+  catalogLoading: '正在读取已配置模型…', catalogEmpty: '当前没有可用的已配置模型。请先在“模型”设置中添加模型，然后重试。',
+  catalogError: '无法读取已配置模型', catalogRetry: '重试', catalogPartial: '部分模型提供方加载失败。',
+  candidateHint: '模型来自“模型”设置；档位和说明用于告诉 Jev 何时选择该模型。',
+  candidateTier: '路由档位', candidateDescription: '路由说明',
+  tierEconomy: '经济档', tierCapability: '能力档', modelMissing: '未在模型设置中配置',
+  removeCandidate: '移除候选', addCandidate: '添加候选',
 } as const
 
 interface JevRouterFace {
   settings: SettingsScope<JevRouterSettings>
+  loadModelCatalog: () => Promise<ModelCatalog>
 }
 
 type CardProps = PropsRuntime<'plugins.item'> & PropsLocale<'jev-router'> & InjectFace<JevRouterFace>
+
+interface CatalogRoute {
+  provider: ModelProviderGroup
+  model: ModelCatalogModel
+}
+
+function catalogRoutes(catalog: ModelCatalog | null): CatalogRoute[] {
+  return catalog?.groups.flatMap(provider => provider.models.map(model => ({ provider, model }))) ?? []
+}
+
+function routeId(route: { provider: string; model: string }): string {
+  return `${route.provider}/${route.model}`
+}
+
+function splitRouteId(id: string, routes: readonly CatalogRoute[]): { provider: string; model: string } | undefined {
+  const route = routes.find(candidate => routeId({ provider: candidate.provider.id, model: candidate.model.id }) === id)
+  return route === undefined ? undefined : { provider: route.provider.id, model: route.model.id }
+}
 
 /** Settings card with no secret readback: only the credential reference is edited. */
 /**
@@ -125,13 +161,31 @@ export function JevRouterCard(props: CardProps) {
     () => props.settings.getSnapshot(),
   )
   const [draft, setDraft] = useState<Partial<JevRouterSettings>>({})
-  const [candidateDraft, setCandidateDraft] = useState<string | undefined>(undefined)
-  const [defaultDraft, setDefaultDraft] = useState<string | undefined>(undefined)
+  const [catalog, setCatalog] = useState<ModelCatalog | null>(null)
+  const [catalogStatus, setCatalogStatus] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [catalogError, setCatalogError] = useState('')
   const [message, setMessage] = useState('')
+  const loadCatalog = () => {
+    setCatalogStatus('loading')
+    setCatalogError('')
+    void props.loadModelCatalog().then(value => {
+      setCatalog(value)
+      setCatalogStatus('ready')
+    }, error => {
+      setCatalogError(error instanceof Error ? error.message : String(error))
+      setCatalogStatus('error')
+    })
+  }
+  useEffect(() => {
+    if (props.view !== 'summary') loadCatalog()
+    // The injected loader is bound to the current Host generation. Settings
+    // cards are remounted on generation replacement, so one load is enough.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   if (props.view === 'summary') return props.t('summary')
   const value = state.value
   if (value === undefined) return props.t('unavailable')
-  const apiKeyEnv = draft.apiKeyEnv ?? value.apiKeyEnv
+  const apiKey = draft.apiKey ?? value.apiKey
   const switchContextLimitTokens = draft.switchContextLimitTokens !== undefined
     ? draft.switchContextLimitTokens
     : value.switchContextLimitTokens
@@ -143,23 +197,75 @@ export function JevRouterCard(props: CardProps) {
   const jevMaxStateChars = draft.jevMaxStateChars ?? value.jevMaxStateChars
   const showDecision = draft.showDecision ?? value.showDecision
   const recordMetrics = draft.recordMetrics ?? value.recordMetrics
-  const candidateText = candidateDraft ?? JSON.stringify(value.candidateModels, null, 2)
-  const defaultText = defaultDraft ?? JSON.stringify(value.defaultModel, null, 2)
+  const candidateModels = draft.candidateModels ?? value.candidateModels
+  const defaultModel = draft.defaultModel ?? value.defaultModel
+  const routes = catalogRoutes(catalog)
+  const configuredRouteIds = new Set(routes.map(route => routeId({ provider: route.provider.id, model: route.model.id })))
+  const fieldStyle = {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 6,
+    padding: '14px 0',
+    borderBottom: '0.5px solid var(--dsw-alias-border-l2)',
+  } as const
+  const labelStyle = {
+    color: 'var(--dsw-alias-label-primary)',
+    fontSize: 13,
+    fontWeight: 500,
+    lineHeight: 1.5,
+  } as const
+  const hintStyle = {
+    margin: 0,
+    color: 'var(--dsw-alias-label-tertiary)',
+    fontSize: 12,
+    lineHeight: 1.5,
+  } as const
+  const inputStyle = {
+    boxSizing: 'border-box',
+    width: '100%',
+    minHeight: 34,
+    padding: '7px 12px',
+    border: '0.5px solid var(--dsw-alias-border-l4)',
+    borderRadius: 8,
+    background: 'var(--dsw-alias-bg-layer-3)',
+    color: 'var(--dsw-alias-label-primary)',
+    font: 'inherit',
+    fontSize: 13,
+    lineHeight: 1.5,
+  } as const
+  const checkRowStyle = {
+    display: 'flex',
+    alignItems: 'flex-start',
+    gap: 8,
+    padding: '12px 0',
+    color: 'var(--dsw-alias-label-primary)',
+    fontSize: 13,
+    lineHeight: 1.5,
+  } as const
+  const sectionStyle = {
+    margin: 0,
+    padding: 0,
+    border: 0,
+  } as const
   return (
-    <form onSubmit={event => {
+    <form style={{ display: 'flex', flexDirection: 'column' }} onSubmit={event => {
       event.preventDefault()
-      let candidateModels = value.candidateModels
-      let defaultModel = value.defaultModel
-      try {
-        candidateModels = candidateDraft === undefined ? value.candidateModels : JSON.parse(candidateDraft) as JevRouterSettings['candidateModels']
-        defaultModel = defaultDraft === undefined ? value.defaultModel : JSON.parse(defaultDraft) as JevRouterSettings['defaultModel']
-      } catch (error: unknown) {
-        setMessage(error instanceof Error ? error.message : String(error))
+      const missing = candidateModels.find(candidate => !configuredRouteIds.has(routeId(candidate)))
+      if (catalogStatus !== 'ready' || routes.length === 0) {
+        setMessage(catalogStatus === 'error' ? `${props.t('catalogError')}: ${catalogError}` : props.t('catalogEmpty'))
+        return
+      }
+      if (missing !== undefined || !configuredRouteIds.has(routeId(defaultModel))) {
+        setMessage(`${props.t('modelMissing')}: ${routeId(missing ?? defaultModel)}`)
+        return
+      }
+      if (candidateModels.length === 0) {
+        setMessage(props.t('candidateHint'))
         return
       }
       void props.settings.mutate([
         { op: 'set', path: ['enabled'], value: value.enabled },
-        { op: 'set', path: ['apiKeyEnv'], value: apiKeyEnv },
+        { op: 'set', path: ['apiKey'], value: apiKey },
         { op: 'set', path: ['candidateModels'], value: JSON.parse(JSON.stringify(candidateModels)) },
         { op: 'set', path: ['defaultModel'], value: JSON.parse(JSON.stringify(defaultModel)) },
         { op: 'set', path: ['switchContextLimitTokens'], value: switchContextLimitTokens },
@@ -173,168 +279,224 @@ export function JevRouterCard(props: CardProps) {
         { op: 'set', path: ['recordMetrics'], value: recordMetrics },
       ]).then(() => setMessage(props.t('saved')), error => setMessage(String(error)))
     }}>
-      <label>
-        <input
-          type="checkbox"
-          checked={value.enabled}
-          disabled={!state.writable}
-          onChange={event => {
-            void props.settings.set('enabled', event.currentTarget.checked)
-          }}
-        />
-        {props.t('enabled')}
-      </label>
-      <label>
-        {props.t('apiKeyEnv')}
-        <input
-          value={apiKeyEnv}
-          disabled={!state.writable}
-          onChange={event => setDraft(previous => ({ ...previous, apiKeyEnv: event.currentTarget.value }))}
-        />
-      </label>
-      <label>{props.t('candidates')}<textarea value={candidateText} onChange={event => {
-        const text = event.currentTarget.value
-        setCandidateDraft(text)
-        try { setDraft(previous => ({ ...previous, candidateModels: JSON.parse(text) as JevRouterSettings['candidateModels'] })) } catch (error: unknown) { void error /* validation reports malformed JSON on save */ }
-      }} /></label>
-      <label>{props.t('defaultModel')}<input value={defaultText} onChange={event => {
-        const text = event.currentTarget.value
-        setDefaultDraft(text)
-        try { setDraft(previous => ({ ...previous, defaultModel: JSON.parse(text) as JevRouterSettings['defaultModel'] })) } catch (error: unknown) { void error /* validation reports malformed JSON on save */ }
-      }} /></label>
-      <label>
-        {props.t('contextLimit')}
-        <input
-          name="switchContextLimitTokens"
-          type="number"
-          min={1}
-          step={1}
-          value={switchContextLimitTokens ?? value.switchContextLimitTokens ?? DEFAULT_SWITCH_CONTEXT_LIMIT_TOKENS}
-          disabled={!state.writable || switchContextLimitTokens === null}
-          onChange={event => setDraft(previous => ({
-            ...previous,
-            switchContextLimitTokens: Number(event.currentTarget.value),
-          }))}
-        />
-      </label>
-      <label>
-        <input
-          name="disableSwitchContextLimit"
-          type="checkbox"
-          checked={switchContextLimitTokens === null}
-          disabled={!state.writable}
-          onChange={event => setDraft(previous => ({
-            ...previous,
-            switchContextLimitTokens: event.currentTarget.checked
-              ? null
-              : value.switchContextLimitTokens ?? DEFAULT_SWITCH_CONTEXT_LIMIT_TOKENS,
-          }))}
-        />
-        {props.t('contextLimitDisabled')}
-      </label>
-      <label>
-        {props.t('overLimitPolicy')}
-        <select
-          name="overLimitPolicy"
-          value={overLimitPolicy}
-          disabled={!state.writable}
-          onChange={event => setDraft(previous => ({
-            ...previous,
-            overLimitPolicy: event.currentTarget.value as JevRouterSettings['overLimitPolicy'],
-          }))}
-        >
-          <option value="upgrade_only">{props.t('overLimitUpgradeOnly')}</option>
-          <option value="keep">{props.t('overLimitKeep')}</option>
-        </select>
-      </label>
-      <label>
-        <input
-          name="cacheAware"
-          type="checkbox"
-          checked={cacheAware}
-          disabled={!state.writable}
-          onChange={event => setDraft(previous => ({ ...previous, cacheAware: event.currentTarget.checked }))}
-        />
-        {props.t('cacheAware')}
-      </label>
-      <label>
-        <input
-          name="showDecision"
-          type="checkbox"
-          checked={showDecision}
-          disabled={!state.writable}
-          onChange={event => setDraft(previous => ({ ...previous, showDecision: event.currentTarget.checked }))}
-        />
-        {props.t('showDecision')}
-      </label>
-      <label>
-        <input
-          name="recordMetrics"
-          type="checkbox"
-          checked={recordMetrics}
-          disabled={!state.writable}
-          onChange={event => setDraft(previous => ({ ...previous, recordMetrics: event.currentTarget.checked }))}
-        />
-        {props.t('recordMetrics')}
-      </label>
-      <details>
-        <summary>{props.t('advanced')}</summary>
-        <label>
-          {props.t('minHoldUserTurns')}
+      <fieldset style={sectionStyle}>
+        <legend style={{ position: 'absolute', width: 1, height: 1, padding: 0, margin: -1, overflow: 'hidden', clip: 'rect(0, 0, 0, 0)', whiteSpace: 'nowrap', border: 0 }}>{props.t('title')}</legend>
+        <label style={{ ...checkRowStyle, paddingTop: 0 }}>
           <input
-            name="minHoldUserTurns"
+            type="checkbox"
+            checked={value.enabled}
+            disabled={!state.writable}
+            onChange={event => {
+              void props.settings.set('enabled', event.currentTarget.checked)
+            }}
+          />
+          <span>{props.t('enabled')}</span>
+        </label>
+        <div style={fieldStyle}>
+          <label htmlFor="jev-api-key" style={labelStyle}>{props.t('apiKey')}</label>
+          <input
+            id="jev-api-key"
+            type="password"
+            autoComplete="off"
+            style={inputStyle}
+            value={apiKey}
+            disabled={!state.writable}
+            onChange={event => setDraft(previous => ({ ...previous, apiKey: event.currentTarget.value }))}
+          />
+          <p style={hintStyle}>直接填写 Jev API Key；该值会保存到插件设置中，不再从环境变量读取。</p>
+        </div>
+        <div style={fieldStyle}>
+          <span id="jev-candidates-label" style={labelStyle}>{props.t('candidates')}</span>
+          <p id="jev-candidates-hint" style={hintStyle}>{props.t('candidateHint')}</p>
+          {catalogStatus === 'loading'
+            ? <p role="status" style={hintStyle}>{props.t('catalogLoading')}</p>
+            : catalogStatus === 'error'
+              ? <div role="alert" style={{ ...hintStyle, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span>{props.t('catalogError')}: {catalogError}</span>
+                  <button type="button" onClick={loadCatalog}>{props.t('catalogRetry')}</button>
+                </div>
+              : routes.length === 0
+                ? <div role="status" style={{ ...hintStyle, display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span>{props.t('catalogEmpty')}</span>
+                    <button type="button" onClick={loadCatalog}>{props.t('catalogRetry')}</button>
+                  </div>
+                : <div role="group" aria-labelledby="jev-candidates-label" aria-describedby="jev-candidates-hint" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    {catalog?.failures.length ? <p role="status" style={hintStyle}>{props.t('catalogPartial')}</p> : null}
+                    {candidateModels.map((candidate, index) => {
+                      const id = routeId(candidate)
+                      const missing = !configuredRouteIds.has(id)
+                      return <div key={`${id}:${String(index)}`} style={{ padding: 10, border: '0.5px solid var(--dsw-alias-border-l3)', borderRadius: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 8, alignItems: 'center' }}>
+                          <label htmlFor={`jev-candidate-model-${String(index)}`} style={labelStyle}>{props.t('candidates')} {index + 1}</label>
+                          <button type="button" disabled={!state.writable || candidateModels.length <= 1} aria-label={`${props.t('removeCandidate')} ${id}`} onClick={() => setDraft(previous => ({
+                            ...previous,
+                            candidateModels: candidateModels.filter((_, candidateIndex) => candidateIndex !== index),
+                          }))}>{props.t('removeCandidate')}</button>
+                        </div>
+                        <select id={`jev-candidate-model-${String(index)}`} name="candidateModel" style={inputStyle} value={id} disabled={!state.writable} onChange={event => {
+                          const selected = splitRouteId(event.currentTarget.value, routes)
+                          if (selected === undefined) return
+                          const catalogModel = routes.find(route => route.provider.id === selected.provider && route.model.id === selected.model)?.model
+                          setDraft(previous => ({
+                            ...previous,
+                            candidateModels: candidateModels.map((entry, candidateIndex) => candidateIndex === index ? {
+                              ...entry,
+                              ...selected,
+                              description: catalogModel?.description ?? entry.description,
+                            } : entry),
+                          }))
+                        }}>
+                          {missing ? <option value={id}>{id} — {props.t('modelMissing')}</option> : null}
+                          {routes.map(route => <option key={routeId({ provider: route.provider.id, model: route.model.id })} value={routeId({ provider: route.provider.id, model: route.model.id })}>
+                            {route.provider.name} · {route.model.name} ({route.provider.id}/{route.model.id})
+                          </option>)}
+                        </select>
+                        <label htmlFor={`jev-candidate-tier-${String(index)}`} style={labelStyle}>{props.t('candidateTier')}</label>
+                        <select id={`jev-candidate-tier-${String(index)}`} name="candidateTier" style={inputStyle} value={candidate.tier} disabled={!state.writable} onChange={event => setDraft(previous => ({
+                          ...previous,
+                          candidateModels: candidateModels.map((entry, candidateIndex) => candidateIndex === index ? {
+                            ...entry,
+                            tier: event.currentTarget.value as JevRouterSettings['candidateModels'][number]['tier'],
+                          } : entry),
+                        }))}>
+                          <option value="economy">{props.t('tierEconomy')}</option>
+                          <option value="capability">{props.t('tierCapability')}</option>
+                        </select>
+                        <label htmlFor={`jev-candidate-description-${String(index)}`} style={labelStyle}>{props.t('candidateDescription')}</label>
+                        <input id={`jev-candidate-description-${String(index)}`} name="candidateDescription" style={inputStyle} value={candidate.description} disabled={!state.writable} onChange={event => setDraft(previous => ({
+                          ...previous,
+                          candidateModels: candidateModels.map((entry, candidateIndex) => candidateIndex === index ? {
+                            ...entry,
+                            description: event.currentTarget.value,
+                          } : entry),
+                        }))} />
+                      </div>
+                    })}
+                    <button type="button" disabled={!state.writable || candidateModels.length >= routes.length} onClick={() => {
+                      const existing = new Set(candidateModels.map(routeId))
+                      const next = routes.find(route => !existing.has(routeId({ provider: route.provider.id, model: route.model.id })))
+                      if (next === undefined) return
+                      setDraft(previous => ({
+                        ...previous,
+                        candidateModels: [...candidateModels, {
+                          provider: next.provider.id,
+                          model: next.model.id,
+                          description: next.model.description ?? `${next.model.name} routing candidate`,
+                          tier: 'economy',
+                        }],
+                      }))
+                    }}>{props.t('addCandidate')}</button>
+                  </div>}
+        </div>
+        <div style={fieldStyle}>
+          <label htmlFor="jev-default-model" style={labelStyle}>{props.t('defaultModel')}</label>
+          <select id="jev-default-model" style={inputStyle} value={routeId(defaultModel)} disabled={!state.writable || catalogStatus !== 'ready' || routes.length === 0} onChange={event => {
+            const selected = splitRouteId(event.currentTarget.value, routes)
+            if (selected !== undefined) setDraft(previous => ({ ...previous, defaultModel: selected }))
+          }}>
+            {!configuredRouteIds.has(routeId(defaultModel)) ? <option value={routeId(defaultModel)}>{routeId(defaultModel)} — {props.t('modelMissing')}</option> : null}
+            {routes.map(route => <option key={routeId({ provider: route.provider.id, model: route.model.id })} value={routeId({ provider: route.provider.id, model: route.model.id })}>
+              {route.provider.name} · {route.model.name} ({route.provider.id}/{route.model.id})
+            </option>)}
+          </select>
+          <p style={hintStyle}>分类服务不可用或超时时，沿用当前路线；没有当前路线时使用这里的模型。</p>
+        </div>
+      </fieldset>
+      <fieldset style={sectionStyle}>
+        <legend style={{ ...labelStyle, padding: '20px 0 0' }}>路由约束</legend>
+        <div style={fieldStyle}>
+          <label htmlFor="switchContextLimitTokens" style={labelStyle}>{props.t('contextLimit')}</label>
+          <input
+            id="switchContextLimitTokens"
+            name="switchContextLimitTokens"
+            style={inputStyle}
             type="number"
-            min={0}
+            min={1}
             step={1}
-            value={minHoldUserTurns}
+            value={switchContextLimitTokens ?? value.switchContextLimitTokens ?? DEFAULT_SWITCH_CONTEXT_LIMIT_TOKENS}
+            disabled={!state.writable || switchContextLimitTokens === null}
+            onChange={event => setDraft(previous => ({
+              ...previous,
+              switchContextLimitTokens: Number(event.currentTarget.value),
+            }))}
+          />
+          <label style={checkRowStyle}>
+            <input
+              name="disableSwitchContextLimit"
+              type="checkbox"
+              checked={switchContextLimitTokens === null}
+              disabled={!state.writable}
+              onChange={event => setDraft(previous => ({
+                ...previous,
+                switchContextLimitTokens: event.currentTarget.checked
+                  ? null
+                  : value.switchContextLimitTokens ?? DEFAULT_SWITCH_CONTEXT_LIMIT_TOKENS,
+              }))}
+            />
+            <span>{props.t('contextLimitDisabled')}</span>
+          </label>
+          <p style={hintStyle}>{props.t('guardNotice')}</p>
+        </div>
+        <div style={fieldStyle}>
+          <label htmlFor="overLimitPolicy" style={labelStyle}>{props.t('overLimitPolicy')}</label>
+          <select
+            id="overLimitPolicy"
+            name="overLimitPolicy"
+            style={inputStyle}
+            value={overLimitPolicy}
             disabled={!state.writable}
             onChange={event => setDraft(previous => ({
               ...previous,
-              minHoldUserTurns: Number(event.currentTarget.value),
+              overLimitPolicy: event.currentTarget.value as JevRouterSettings['overLimitPolicy'],
             }))}
-          />
+          >
+            <option value="upgrade_only">{props.t('overLimitUpgradeOnly')}</option>
+            <option value="keep">{props.t('overLimitKeep')}</option>
+          </select>
+        </div>
+        <label style={checkRowStyle}>
+          <input name="cacheAware" type="checkbox" checked={cacheAware} disabled={!state.writable} onChange={event => setDraft(previous => ({ ...previous, cacheAware: event.currentTarget.checked }))} />
+          <span>{props.t('cacheAware')}</span>
         </label>
-        <label>
-          <input
-            name="routeReasoning"
-            type="checkbox"
-            checked={routeReasoning}
-            disabled={!state.writable}
-            onChange={event => setDraft(previous => ({ ...previous, routeReasoning: event.currentTarget.checked }))}
-          />
-          {props.t('routeReasoning')}
+      </fieldset>
+      <fieldset style={sectionStyle}>
+        <legend style={{ ...labelStyle, padding: '20px 0 0' }}>诊断与展示</legend>
+        <label style={checkRowStyle}>
+          <input name="showDecision" type="checkbox" checked={showDecision} disabled={!state.writable} onChange={event => setDraft(previous => ({ ...previous, showDecision: event.currentTarget.checked }))} />
+          <span>{props.t('showDecision')}</span>
         </label>
-        <label>
-          {props.t('jevTimeoutMs')}
-          <input
-            name="jevTimeoutMs"
-            type="number"
-            min={1}
-            step={1}
-            value={jevTimeoutMs}
-            disabled={!state.writable}
-            onChange={event => setDraft(previous => ({ ...previous, jevTimeoutMs: Number(event.currentTarget.value) }))}
-          />
+        <label style={checkRowStyle}>
+          <input name="recordMetrics" type="checkbox" checked={recordMetrics} disabled={!state.writable} onChange={event => setDraft(previous => ({ ...previous, recordMetrics: event.currentTarget.checked }))} />
+          <span>{props.t('recordMetrics')}</span>
         </label>
-        <label>
-          {props.t('jevMaxStateChars')}
-          <input
-            name="jevMaxStateChars"
-            type="number"
-            min={1}
-            step={1}
-            value={jevMaxStateChars}
-            disabled={!state.writable}
-            onChange={event => setDraft(previous => ({ ...previous, jevMaxStateChars: Number(event.currentTarget.value) }))}
-          />
-        </label>
-        <p>{props.t('reasoningNotice')}</p>
+        <p style={{ ...hintStyle, padding: '0 0 14px' }}>{props.t('metricsNotice')}</p>
+      </fieldset>
+      <details style={{ borderTop: '0.5px solid var(--dsw-alias-border-l2)', padding: '14px 0' }}>
+        <summary style={{ cursor: 'pointer', color: 'var(--dsw-alias-label-primary)', fontSize: 13, fontWeight: 500 }}>{props.t('advanced')}</summary>
+        <div style={{ paddingTop: 4 }}>
+          <div style={fieldStyle}>
+            <label htmlFor="minHoldUserTurns" style={labelStyle}>{props.t('minHoldUserTurns')}</label>
+            <input id="minHoldUserTurns" name="minHoldUserTurns" style={inputStyle} type="number" min={0} step={1} value={minHoldUserTurns} disabled={!state.writable} onChange={event => setDraft(previous => ({ ...previous, minHoldUserTurns: Number(event.currentTarget.value) }))} />
+          </div>
+          <label style={checkRowStyle}>
+            <input name="routeReasoning" type="checkbox" checked={routeReasoning} disabled={!state.writable} onChange={event => setDraft(previous => ({ ...previous, routeReasoning: event.currentTarget.checked }))} />
+            <span>{props.t('routeReasoning')}</span>
+          </label>
+          <div style={fieldStyle}>
+            <label htmlFor="jevTimeoutMs" style={labelStyle}>{props.t('jevTimeoutMs')}</label>
+            <input id="jevTimeoutMs" name="jevTimeoutMs" style={inputStyle} type="number" min={1} step={1} value={jevTimeoutMs} disabled={!state.writable} onChange={event => setDraft(previous => ({ ...previous, jevTimeoutMs: Number(event.currentTarget.value) }))} />
+          </div>
+          <div style={fieldStyle}>
+            <label htmlFor="jevMaxStateChars" style={labelStyle}>{props.t('jevMaxStateChars')}</label>
+            <input id="jevMaxStateChars" name="jevMaxStateChars" style={inputStyle} type="number" min={1} step={1} value={jevMaxStateChars} disabled={!state.writable} onChange={event => setDraft(previous => ({ ...previous, jevMaxStateChars: Number(event.currentTarget.value) }))} />
+            <p style={hintStyle}>{props.t('reasoningNotice')}</p>
+          </div>
+        </div>
       </details>
-      <p>{props.t('guardNotice')}</p>
-      <p>{props.t('dataNotice')}</p>
-      <p>{props.t('metricsNotice')}</p>
-      <button type="submit" disabled={!state.writable}>{props.t('save')}</button>
-      {message ? <span role="status">{message}</span> : null}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingTop: 16 }}>
+        <button type="submit" disabled={!state.writable} style={{ border: '1px solid transparent', borderRadius: 8, padding: '5px 14px', font: 'inherit', fontSize: 13, lineHeight: 1.5, cursor: state.writable ? 'pointer' : 'default', background: 'var(--dsw-alias-label-primary)', color: 'var(--dsw-alias-bg-layer-3)', opacity: state.writable ? 1 : 0.4 }}>{props.t('save')}</button>
+        {message ? <span role="status" style={hintStyle}>{message}</span> : null}
+      </div>
     </form>
   )
 }
@@ -370,22 +532,51 @@ interface JevRouterModeInjected {
   setMode: (mode: 'auto' | 'fixed') => Promise<boolean>
 }
 
-/** Show and toggle the durable Auto/Fixed routing mode for one session.
- * @param props - session projection and command face supplied by the conversation header slot.
+/** Show and toggle the durable automatic/fixed model mode for one session.
+ * @param props - session projection and command face supplied by the input toolbar slot.
  * @returns a button reflecting and toggling the session routing mode.
  */
 export function JevRouterModeControl(
-  props: PropsRuntime<'conversation.session.header.actions'> & PropsLocale<'jev-router'> & InjectFace<JevRouterModeInjected>,
+  props: PropsRuntime<'conversation.input.left'> & PropsLocale<'jev-router'> & InjectFace<JevRouterModeInjected>,
 ) {
   const projection = props.useProjection('jevRouterHistory') as JevRouterHistoryView | undefined
   const mode = projection?.mode ?? 'fixed'
   const [busy, setBusy] = useState(false)
   const [failed, setFailed] = useState(false)
+  const [hovered, setHovered] = useState(false)
+  const [focused, setFocused] = useState(false)
+  const label = mode === 'auto' ? props.t('modeAuto') : props.t('modeFixed')
   return <button
     type="button"
     disabled={busy}
     aria-pressed={mode === 'auto'}
-    title={failed ? props.t('modeSwitchError') : undefined}
+    aria-label={label}
+    title={failed ? props.t('modeSwitchError') : label}
+    style={{
+      display: 'flex',
+      alignItems: 'center',
+      gap: 4,
+      minWidth: 0,
+      maxWidth: 'min(220px, 45cqw)',
+      height: 28,
+      padding: '0 4px 0 8px',
+      border: 'none',
+      borderRadius: 24,
+      outline: 'none',
+      background: hovered ? 'var(--dsw-alias-interactive-bg-hover)' : 'transparent',
+      color: busy ? 'var(--dsw-alias-label-dimmed)' : 'var(--dsw-alias-label-secondary)',
+      font: 'inherit',
+      fontSize: 13,
+      lineHeight: '20px',
+      fontWeight: 500,
+      cursor: busy ? 'default' : 'pointer',
+      boxShadow: focused ? '0 0 0 2px var(--dsw-alias-border-l3)' : 'none',
+      whiteSpace: 'nowrap',
+    }}
+    onMouseEnter={() => setHovered(true)}
+    onMouseLeave={() => setHovered(false)}
+    onFocus={() => setFocused(true)}
+    onBlur={() => setFocused(false)}
     onClick={() => {
       setBusy(true)
       setFailed(false)
@@ -393,7 +584,7 @@ export function JevRouterModeControl(
         .then(ok => { setFailed(!ok) }, () => { setFailed(true) })
         .finally(() => { setBusy(false) })
     }}
-  >{mode === 'auto' ? props.t('modeAuto') : props.t('modeFixed')}</button>
+  >{label}</button>
 }
 
 /** Client plugin entry; the host settings scope remains the source of truth. */
@@ -403,7 +594,7 @@ export function JevRouterModeControl(
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { en, zh }), 'jev-router: dictionaries')
   const t = ctx.locale.bind(NS)
-  ctx.inject(['slots', 'settingsScope'], scope => {
+  ctx.inject(['remote', 'remote.session', 'slots', 'settingsScope'], scope => {
     const settings = scope.settingsScope.bind<JevRouterSettings>({ namespace: NS })
     scope.slots.inject('plugins.item', () => scope.slots.register({
       name: 'plugins.item',
@@ -411,13 +602,20 @@ export function apply(ctx: ClientContext): void {
       order: 45,
       label: () => t('title'),
       locale: NS,
-      inject: () => ({ settings }),
+      inject: () => ({
+        settings,
+        loadModelCatalog: async () => {
+          const response = await scope.remote.session.modelCatalog()
+          if (!response.ok) throw new Error(`${response.error.code}: ${response.error.message}`)
+          return response.value
+        },
+      }),
     }, JevRouterCard))
     scope.slots.inject('conversation.chat.turnTail', () => scope.slots.register({
       name: 'conversation.chat.turnTail', id: NS, locale: NS,
     }, JevRouterDecisionTail))
-    scope.slots.inject('conversation.session.header.actions', () => scope.slots.register({
-      name: 'conversation.session.header.actions', id: `${NS}-mode`, order: 35, locale: NS,
+    scope.slots.inject('conversation.input.left', () => scope.slots.register({
+      name: 'conversation.input.left', id: `${NS}-mode`, order: 35, locale: NS,
       inject: sessionId => ({
         setMode: async (mode: 'auto' | 'fixed') => {
           const sessions = scope.get('sessions') as unknown as ISessions

@@ -48,13 +48,113 @@ export interface JevClientOptions {
   fetch?: typeof globalThis.fetch
 }
 
-const DEFAULT_ENDPOINT = 'https://api.typesafe.ai/v1/system-one'
+/** Current TypeSafe System One HTTP endpoint. */
+export const DEFAULT_JEV_ENDPOINT = 'https://api.typesafe.ai/v1/systemone'
+
+interface JevRouteChoice {
+  key: string
+  provider: string
+  model: string
+  reasoningEffort?: string
+  criterion: {
+    provider: string
+    model: string
+    description: string
+    tier: CandidateModel['tier']
+    reasoningEffort: string
+  }
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function readDecision(value: unknown): JevDecision {
+function routeChoices(state: JevState): JevRouteChoice[] {
+  const reasoningByRoute = new Map(
+    state.reasoning?.options.map(option => [`${option.provider}/${option.model}`, option.efforts] as const) ?? [],
+  )
+  const choices: JevRouteChoice[] = []
+  for (const candidate of state.candidates) {
+    const efforts = state.reasoning?.enabled === true
+      ? reasoningByRoute.get(`${candidate.provider}/${candidate.model}`) ?? []
+      : []
+    const routeEfforts: readonly (string | undefined)[] = efforts.length === 0 ? [undefined] : efforts
+    for (const reasoningEffort of routeEfforts) {
+      choices.push({
+        key: `route_${String(choices.length)}`,
+        provider: candidate.provider,
+        model: candidate.model,
+        ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+        criterion: {
+          provider: candidate.provider,
+          model: candidate.model,
+          description: candidate.description,
+          tier: candidate.tier,
+          reasoningEffort: reasoningEffort ?? 'adapter-default',
+        },
+      })
+    }
+  }
+  return choices
+}
+
+function readClassificationUsage(value: unknown, root?: Record<string, unknown>): JevUsage | undefined {
+  const usageSource = isRecord(value) && isRecord(value.usage)
+    ? value.usage
+    : isRecord(root?.usage) ? root.usage : undefined
+  if (usageSource === undefined) return undefined
+  const readCount = (field: string, wireField: string): number | null | undefined => {
+    const count = usageSource[wireField] ?? usageSource[field]
+    if (count === undefined) return undefined
+    if (count === null) return null
+    if (typeof count !== 'number' || !Number.isSafeInteger(count) || count < 0) {
+      throw new Error(`Jev returned an invalid ${field} usage value`)
+    }
+    return count
+  }
+  const inputTokens = readCount('inputTokens', 'input_tokens')
+  const outputTokens = readCount('outputTokens', 'output_tokens')
+  const totalTokens = readCount('totalTokens', 'total_tokens')
+  const cacheReadTokens = readCount('cacheReadTokens', 'cache_read_tokens')
+  const cacheWriteTokens = readCount('cacheWriteTokens', 'cache_write_tokens')
+  return {
+    inputTokens: inputTokens ?? null,
+    outputTokens: outputTokens ?? null,
+    ...(totalTokens === undefined ? {} : { totalTokens }),
+    cacheReadTokens: cacheReadTokens ?? null,
+    cacheWriteTokens: cacheWriteTokens ?? null,
+  }
+}
+
+function readDecision(value: unknown, choices: readonly JevRouteChoice[]): JevDecision {
+  if (isRecord(value) && Object.hasOwn(value, 'answers')) {
+    if (!isRecord(value.answers) || !isRecord(value.answers.model)) {
+      throw new Error('Jev returned no valid model Choice answer')
+    }
+    const answer = value.answers.model
+    if (answer.type !== 'choice' || typeof answer.choice !== 'string') {
+      throw new Error('Jev returned no valid model Choice answer')
+    }
+    const route = choices.find(choice => choice.key === answer.choice)
+    if (route === undefined) throw new Error(`Jev returned unknown model choice "${answer.choice}"`)
+    if (answer.confidence !== undefined
+      && (typeof answer.confidence !== 'number' || !Number.isFinite(answer.confidence)
+        || answer.confidence < 0 || answer.confidence > 1)) {
+      throw new Error('Jev returned an invalid confidence')
+    }
+    const classificationUsage = readClassificationUsage(value)
+    return {
+      provider: route.provider,
+      model: route.model,
+      ...(route.reasoningEffort === undefined ? {} : { reasoningEffort: route.reasoningEffort }),
+      ...(answer.confidence === undefined ? {} : { confidence: answer.confidence }),
+      ...(typeof value.model === 'string' ? { jevVersion: value.model } : {}),
+      ...(classificationUsage === undefined ? {} : { classificationUsage }),
+    }
+  }
+
+  // Preserve compatibility with endpoint overrides that still return the
+  // original plugin response shape while the public TypeSafe API uses answers.
   const root = isRecord(value) && isRecord(value.result) ? value.result : value
   if (!isRecord(root) || typeof root.provider !== 'string' || typeof root.model !== 'string') {
     throw new Error('Jev returned no valid provider/model choice')
@@ -67,25 +167,7 @@ function readDecision(value: unknown): JevDecision {
       || root.confidence < 0 || root.confidence > 1)) {
     throw new Error('Jev returned an invalid confidence')
   }
-  const usageSource = isRecord(value) && isRecord(value.usage)
-    ? value.usage
-    : isRecord(root.usage) ? root.usage : undefined
-  const readCount = (field: string): number | null | undefined => {
-    const count = usageSource?.[field]
-    if (count === undefined) return undefined
-    if (count === null) return null
-    if (typeof count !== 'number' || !Number.isSafeInteger(count) || count < 0) {
-      throw new Error(`Jev returned an invalid ${field} usage value`)
-    }
-    return count
-  }
-  const classificationUsage = usageSource === undefined ? undefined : {
-    inputTokens: readCount('inputTokens') ?? null,
-    outputTokens: readCount('outputTokens') ?? null,
-    ...(readCount('totalTokens') === undefined ? {} : { totalTokens: readCount('totalTokens') }),
-    cacheReadTokens: readCount('cacheReadTokens') ?? null,
-    cacheWriteTokens: readCount('cacheWriteTokens') ?? null,
-  }
+  const classificationUsage = readClassificationUsage(value, root)
   return {
     provider: root.provider,
     model: root.model,
@@ -119,7 +201,8 @@ export async function classifyWithJev(
   signal.addEventListener('abort', abort, { once: true })
   const timer = setTimeout(() => controller.abort(new Error('Jev classification timed out')), settings.jevTimeoutMs)
   try {
-    const response = await (options.fetch ?? globalThis.fetch)(options.endpoint ?? DEFAULT_ENDPOINT, {
+    const choices = routeChoices(state)
+    const response = await (options.fetch ?? globalThis.fetch)(options.endpoint ?? DEFAULT_JEV_ENDPOINT, {
       method: 'POST',
       headers: {
         accept: 'application/json',
@@ -129,27 +212,18 @@ export async function classifyWithJev(
       body: JSON.stringify({
         model: 'jev-latest',
         state,
-        choice: {
-          name: 'model',
-          options: state.candidates.map(candidate => ({
-            provider: candidate.provider,
-            model: candidate.model,
-            description: candidate.description,
-            tier: candidate.tier,
-          })),
-        },
-        ...(state.reasoning === undefined ? {} : {
-          reasoning: {
-            enabled: state.reasoning.enabled,
-            current: state.reasoning.current,
-            options: state.reasoning.options,
+        questions: {
+          model: {
+            type: 'choice',
+            instructions: 'Select the best execution route and reasoning effort for the current user request. Prefer an economy route for simple, routine, or short work, and a capability route for complex reasoning, tool use, or quality-critical work. Choose the least expensive reasoning effort sufficient for the task.',
+            criteria: Object.fromEntries(choices.map(choice => [choice.key, choice.criterion])),
           },
-        }),
+        },
       }),
       signal: controller.signal,
     })
     if (!response.ok) throw new Error(`Jev request failed with HTTP ${String(response.status)}`)
-    return readDecision(await response.json())
+    return readDecision(await response.json(), choices)
   } finally {
     clearTimeout(timer)
     signal.removeEventListener('abort', abort)

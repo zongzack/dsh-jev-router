@@ -48,6 +48,7 @@ function declareSurfaces(ctx: Context): () => void {
     children: {
       'plugins.item': { kind: 'list', scope: 'root' },
       'conversation.chat.turnTail': { kind: 'list', scope: 'session' },
+      'conversation.input.left': { kind: 'list', scope: 'session' },
       'conversation.session.header.actions': { kind: 'list', scope: 'session' },
     },
   } as never, Empty)
@@ -76,6 +77,14 @@ describe('Jev router Client composition', () => {
         subscribe: () => () => {},
       }),
     } as never)
+    ctx.provide('remote', {
+      session: {
+        modelCatalog: async () => ({
+          ok: true,
+          value: { default: { provider: 'fixture', model: 'model' }, routableProviders: ['fixture'], groups: [], failures: [] },
+        }),
+      },
+    } as never)
     ctx.provide('sessions', {
       scope: (id: SessionId) => id === sessionId ? agentContext : undefined,
       sessionOf: (candidate: Context) => candidate === agentContext ? session : undefined,
@@ -83,10 +92,11 @@ describe('Jev router Client composition', () => {
 
     const first = ctx.plugin({ inject: [...inject], apply })
     await first.await()
-    const entries = ctx.slots.entries('conversation.session.header.actions')
+    const entries = ctx.slots.entries('conversation.input.left')
     expect(entries).toHaveLength(1)
     expect(entries[0]?.component).toBe(JevRouterModeControl)
     expect(entries[0]?.options).toMatchObject({ id: 'jev-router-mode', order: 35 })
+    expect(ctx.slots.entries('conversation.session.header.actions')).toHaveLength(0)
     const injected = (entries[0]?.inject as unknown as (id: SessionId) => {
       setMode: (mode: 'auto' | 'fixed') => Promise<boolean>
     })(sessionId)
@@ -95,11 +105,11 @@ describe('Jev router Client composition', () => {
     expect(command.mock.calls.map(([input]) => input)).toEqual(['/jev-auto', '/jev-fixed'])
 
     await first.dispose()
-    expect(ctx.slots.entries('conversation.session.header.actions')).toHaveLength(0)
+    expect(ctx.slots.entries('conversation.input.left')).toHaveLength(0)
 
     const reloaded = ctx.plugin({ inject: [...inject], apply })
     await reloaded.await()
-    expect(ctx.slots.entries('conversation.session.header.actions')).toHaveLength(1)
+    expect(ctx.slots.entries('conversation.input.left')).toHaveLength(1)
     await reloaded.dispose()
     removeSurfaces()
     await ctx.fiber.dispose()

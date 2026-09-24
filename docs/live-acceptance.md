@@ -10,11 +10,13 @@ pnpm install
 pnpm run build
 
 cd /Users/zong/Desktop/Project/GitHub-fork/zong-deepseek-harness
-pnpm add --workspace-root file:/Users/zong/Desktop/Project/deepseek-plugin
+pnpm dsh plugin --profile web add file:/Users/zong/Desktop/Project/deepseek-plugin
 pnpm dsh web --patch /Users/zong/Desktop/Project/deepseek-plugin/examples/jev-router.patch.yml
 ```
 
-在 Web profile 的 credentials 页面写入 TypeSafe System One Bearer key，并在 `jev-router` 设置中使用引用名（例如 `TYPESAFE_API_KEY`）。不要把 key 写入 `cordis.yml`、普通设置、截图或 logger。默认设置是初始值，不代表实测最优：插件默认关闭，候选是 `ctapi/deepseek-v4-flash-vip`（economy）和 `ctapi/deepseek-v4-pro-vip`（capability），阈值 32,768、保持 2 回合、Jev 超时 2,000 ms、材料预算 6,000 Unicode 字符。
+这里使用 dsh 的 profile 级插件安装命令；仅执行 `pnpm add --workspace-root` 或在 dsh 工作区根目录执行 `pnpm link`，不会把插件安装到正在运行的 `web` profile。若插件已经安装，可用 `pnpm dsh plugin --profile web why @zong/dsh-jev-router` 检查，不要重复执行 `add`。
+
+在 Jev 自动路由设置页的 `apiKey` 密码框中直接填写 TypeSafe System One Bearer key。不要把 key 写入 `cordis.yml`、日志或截图；设置持久化与同步链路会保存该值，需按部署安全策略保护。插件通过当前 TypeSafe endpoint `https://api.typesafe.ai/v1/systemone` 发送 `questions.model` Choice 请求，并从 `answers.model.choice` 还原路由。默认设置是初始值，不代表实测最优：插件默认关闭，候选是 `ctapi/deepseek-v4-flash-vip`（economy）和 `ctapi/deepseek-v4-pro-vip`（capability），阈值 32,768、保持 2 回合、Jev 超时 2,000 ms、材料预算 6,000 Unicode 字符。
 
 ## 真实路线验收表
 

@@ -3,6 +3,20 @@ import { describe, expect, it, vi } from 'vitest'
 import { JevRouterCard, JevRouterModeControl } from '../src/client.tsx'
 import { defaultSettings } from '../src/config.ts'
 
+const catalog = {
+  default: { provider: 'ctapi', model: 'deepseek-v4-pro-vip' },
+  routableProviders: ['ctapi'],
+  groups: [{
+    id: 'ctapi',
+    name: 'CTAPI',
+    models: [
+      { id: 'deepseek-v4-flash-vip', name: 'DeepSeek Flash', description: 'Fast model' },
+      { id: 'deepseek-v4-pro-vip', name: 'DeepSeek Pro', description: 'Powerful model' },
+    ],
+  }],
+  failures: [],
+} as const
+
 describe('Jev router settings card', () => {
   it('shows common guards, folds reasoning and Jev limits under advanced settings, and saves atomically', async () => {
     const value = defaultSettings({ provider: 'ctapi', model: 'deepseek-v4-pro-vip' })
@@ -18,9 +32,21 @@ describe('Jev router settings card', () => {
       view: 'full',
       t: (key: string) => key,
       settings,
+      loadModelCatalog: vi.fn(async () => catalog),
     } as unknown as Parameters<typeof JevRouterCard>[0]
-    const view = create(<JevRouterCard {...props} />)
+    let view!: ReturnType<typeof create>
+    await act(async () => { view = create(<JevRouterCard {...props} />) })
     const root = view.root
+
+    expect(root.findAllByType('textarea')).toHaveLength(0)
+    expect(root.findAllByProps({ name: 'candidateModel' })).toHaveLength(2)
+    expect(root.findByProps({ id: 'jev-default-model' }).props.value).toBe('ctapi/deepseek-v4-pro-vip')
+
+    const apiKey = root.findByProps({ id: 'jev-api-key' })
+    expect(apiKey.props.type).toBe('password')
+    act(() => {
+      apiKey.props.onChange({ currentTarget: { value: 'jev-secret' } })
+    })
 
     expect(root.findByType('details').findByType('summary').children).toContain('advanced')
     const limit = root.findByProps({ name: 'switchContextLimitTokens' })
@@ -49,6 +75,7 @@ describe('Jev router settings card', () => {
 
     expect(mutate).toHaveBeenCalledTimes(1)
     expect(mutate.mock.calls[0]?.[0]).toEqual(expect.arrayContaining([
+      { op: 'set', path: ['apiKey'], value: 'jev-secret' },
       { op: 'set', path: ['switchContextLimitTokens'], value: 65_536 },
       { op: 'set', path: ['overLimitPolicy'], value: 'keep' },
       { op: 'set', path: ['minHoldUserTurns'], value: 0 },
@@ -59,6 +86,33 @@ describe('Jev router settings card', () => {
       { op: 'set', path: ['showDecision'], value: false },
       { op: 'set', path: ['recordMetrics'], value: false },
     ]))
+  })
+
+  it('loads candidates from the configured model catalog and blocks stale routes', async () => {
+    const value = defaultSettings({ provider: 'ctapi', model: 'deepseek-v4-pro-vip' })
+    const mutate = vi.fn(async () => {})
+    const props = {
+      view: 'full',
+      t: (key: string) => key,
+      settings: {
+        getSnapshot: () => ({ value, writable: true }),
+        subscribe: () => () => {},
+        mutate,
+        set: vi.fn(async () => {}),
+      },
+      loadModelCatalog: vi.fn(async () => ({
+        ...catalog,
+        groups: [{ ...catalog.groups[0], models: [catalog.groups[0].models[1]] }],
+      })),
+    } as unknown as Parameters<typeof JevRouterCard>[0]
+    let view!: ReturnType<typeof create>
+    await act(async () => { view = create(<JevRouterCard {...props} />) })
+
+    const stale = view.root.findByProps({ id: 'jev-candidate-model-0' })
+    expect(stale.findAllByType('option')[0]?.children.join('')).toContain('modelMissing')
+    await act(async () => { view.root.findByType('form').props.onSubmit({ preventDefault() {} }) })
+    expect(mutate).not.toHaveBeenCalled()
+    expect(view.root.findByProps({ role: 'status' }).children.join('')).toContain('modelMissing')
   })
 })
 
@@ -72,6 +126,12 @@ describe('Jev router session mode control', () => {
     } as unknown as Parameters<typeof JevRouterModeControl>[0]
     const view = create(<JevRouterModeControl {...props} />)
     expect(view.root.findByType('button').children).toEqual(['modeFixed'])
+    expect(view.root.findByType('button').props.style).toMatchObject({
+      height: 28,
+      borderRadius: 24,
+      fontSize: 13,
+      fontWeight: 500,
+    })
     await act(async () => { view.root.findByType('button').props.onClick() })
     expect(setMode).toHaveBeenCalledWith('auto')
 

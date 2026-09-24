@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
-  DEFAULT_CANDIDATES, defaultSettings, validateSettings,
+  DEFAULT_API_KEY, DEFAULT_CANDIDATES, defaultSettings, validateSettings,
 } from '../src/config.ts'
 import { boundJevState, classifyWithJev } from '../src/jev.ts'
 
@@ -8,12 +8,14 @@ describe('jev-router configuration', () => {
   it('starts disabled with the two explicit ctapi candidates', () => {
     const settings = defaultSettings({ provider: 'ctapi', model: 'deepseek-v4-pro-vip' })
     expect(settings.enabled).toBe(false)
+    expect(settings.apiKey).toBe(DEFAULT_API_KEY)
     expect(settings.candidateModels).toEqual(DEFAULT_CANDIDATES)
     expect(settings.defaultModel).toEqual({ provider: 'ctapi', model: 'deepseek-v4-pro-vip' })
   })
 
-  it('rejects duplicate candidates while allowing an independent fallback model', () => {
+  it('accepts a direct API key while allowing an independent fallback model', () => {
     const settings = defaultSettings({ provider: 'ctapi', model: 'deepseek-v4-pro-vip' })
+    expect(() => validateSettings({ ...settings, apiKey: 'jev-secret' })).not.toThrow()
     expect(() => validateSettings({
       ...settings,
       candidateModels: [settings.candidateModels[0]!, settings.candidateModels[0]!],
@@ -34,18 +36,47 @@ describe('jev-router configuration', () => {
 })
 
 describe('Jev transport', () => {
-  it('sends a bearer credential and validates the structured choice', async () => {
-    const fetch = vi.fn<typeof globalThis.fetch>(async (_input, init) => {
+  it('uses the current System One endpoint and maps a typed Choice answer back to one route', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+      expect(String(input)).toBe('https://api.typesafe.ai/v1/systemone')
       expect((init?.headers as Record<string, string>).authorization).toBe('Bearer secret')
       expect(JSON.parse(String(init?.body))).toMatchObject({
         model: 'jev-latest',
-        reasoning: { enabled: true, options: [{ provider: 'ctapi', model: 'deepseek-v4-pro-vip', efforts: ['small', 'large'] }] },
+        state: {
+          input: 'hello',
+          reasoning: {
+            enabled: true,
+            options: [{ provider: 'ctapi', model: 'deepseek-v4-pro-vip', efforts: ['small', 'large'] }],
+          },
+        },
+        questions: {
+          model: {
+            type: 'choice',
+            instructions: expect.any(String),
+            criteria: {
+              route_0: {
+                provider: 'ctapi', model: 'deepseek-v4-flash-vip', tier: 'economy',
+                reasoningEffort: 'adapter-default',
+              },
+              route_1: {
+                provider: 'ctapi', model: 'deepseek-v4-pro-vip', tier: 'capability', reasoningEffort: 'small',
+              },
+              route_2: {
+                provider: 'ctapi', model: 'deepseek-v4-pro-vip', tier: 'capability', reasoningEffort: 'large',
+              },
+            },
+          },
+        },
       })
       return new Response(JSON.stringify({
-        result: {
-          provider: 'ctapi', model: 'deepseek-v4-pro-vip', reasoningEffort: 'large', confidence: 0.2, jevVersion: 'jev-test',
+        model: 'jev-test',
+        answers: {
+          model: {
+            type: 'choice', choice: 'route_2', confidence: 0.2,
+            probabilities: { route_0: 0.1, route_1: 0.2, route_2: 0.7 },
+          },
         },
-        usage: { inputTokens: 21, outputTokens: 3 },
+        usage: { input_tokens: 21, output_tokens: 3 },
       }), { status: 200 })
     })
     const settings = defaultSettings({ provider: 'ctapi', model: 'deepseek-v4-pro-vip' })
@@ -118,20 +149,22 @@ describe('Jev transport', () => {
     }, minimumChars - 1)).toThrow(/current input/)
   })
 
-  it('rejects malformed reasoning and confidence without partially accepting the route', async () => {
+  it('rejects an unknown typed Choice answer without partially accepting a route', async () => {
     const settings = defaultSettings({ provider: 'ctapi', model: 'deepseek-v4-pro-vip' })
-    const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response(JSON.stringify({ result: {
-      provider: 'ctapi', model: 'deepseek-v4-pro-vip', reasoningEffort: 3,
-    } }), { status: 200 }))
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response(JSON.stringify({
+      model: 'jev-test',
+      answers: { model: { type: 'choice', choice: 'route_missing', confidence: 0.5 } },
+    }), { status: 200 }))
     await expect(classifyWithJev({ input: 'hello', candidates: settings.candidateModels }, settings, 'secret', new AbortController().signal, { fetch }))
-      .rejects.toThrow(/invalid reasoning effort/)
+      .rejects.toThrow(/unknown model choice/)
   })
 
   it('rejects malformed classification usage rather than recording guessed metrics', async () => {
     const settings = defaultSettings({ provider: 'ctapi', model: 'deepseek-v4-pro-vip' })
     const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response(JSON.stringify({
-      result: { provider: 'ctapi', model: 'deepseek-v4-pro-vip' },
-      usage: { inputTokens: 'unknown', outputTokens: 1 },
+      model: 'jev-test',
+      answers: { model: { type: 'choice', choice: 'route_0', confidence: 0.5 } },
+      usage: { input_tokens: 'unknown', output_tokens: 1 },
     }), { status: 200 }))
     await expect(classifyWithJev({ input: 'hello', candidates: settings.candidateModels }, settings, 'secret', new AbortController().signal, { fetch }))
       .rejects.toThrow(/inputTokens usage/)

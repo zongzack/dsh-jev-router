@@ -2,28 +2,30 @@
 
 这是一个独立的 DeepSeek Harness Cordis 插件，提供 Host 路由和 Web 设置页。插件只接管选择了 Auto 的主会话；关闭、固定模型和子 Agent 都保持 dsh 原有行为。当前策略版本为 `jev-router/v1`。
 
-## 开发安装
+## 开发安装与启动
 
-在插件仓库执行构建，然后把包目录加入 dsh profile 的插件清单：
+下面的命令按你从源码运行 dsh 的目录组织。先在插件仓库构建，再把本地包安装到实际运行 Web 的 `web` profile：
 
 ```sh
 pnpm install
 pnpm run build
 ```
 
-开发时把本地包安装到实际运行 Web 的 `web` profile；仅在 dsh workspace 根目录执行 `pnpm link` 不会把包安装到该 profile：
+切换到 dsh 源码仓库（本项目当前使用的路径是 `/Users/zong/Desktop/Project/GitHub-fork/zong-deepseek-harness`），执行 profile 级安装和启动：
 
 ```sh
 cd /Users/zong/Desktop/Project/GitHub-fork/zong-deepseek-harness
 pnpm dsh plugin --profile web add file:/Users/zong/Desktop/Project/deepseek-plugin
 pnpm dsh plugin --profile web why @zong/dsh-jev-router
-pnpm dsh --profile web \
+pnpm dsh web \
   --patch /Users/zong/Desktop/Project/deepseek-plugin/examples/jev-router.patch.yml
 ```
 
+首次安装后，日常开发只需在插件仓库重新执行 `pnpm run build`，然后重新启动 dsh Web；如果 profile 中已经安装过该本地包，不要重复执行 `add`，可用上面的 `why` 命令确认安装状态。停止后再次启动仍使用同一条 `pnpm dsh web --patch ...` 命令。启动器输出的完整认证 URL 才是应访问的地址。
+
 Host 入口是包根导出，Web loader 会依据 `package.json` 的 `dsh.client` 声明加载 `./client`。`pnpm run build` 会把浏览器入口打成 dsh Client Modules 所需的 lazy-CJS 注册脚本，并校验 `window.__ModuleLoader__.load(...)` 的插件 id 和 factory；普通 ESM 客户端产物会让同一 combo 中的所有插件一起显示 `import failed`。示例 patch 在现有 Web profile 上追加插件，不修改 dsh 主循环。启动后请使用 dsh 日志输出的完整认证 URL，而不是直接访问裸 `http://127.0.0.1:3080/`。
 
-首次安装的 `jev-router` 设置默认关闭。开启后，设置页只保存 `apiKeyEnv` 凭据引用，不会读回或记录 TypeSafe 密钥明文。凭据值应通过 dsh credentials 服务写入，例如 Web Models 页面或部署使用的 credentials provider。
+首次安装的 `jev-router` 设置默认关闭。开启后，在设置页的 `apiKey` 字段直接填写 TypeSafe Jev API Key。该值会保存到插件设置并随设置同步，不再从 `TYPESAFE_API_KEY` 环境变量或 dsh credentials 服务读取；页面使用密码控件避免直接展示已填写的密钥，但请按你的部署安全策略保护设置存储和同步链路。
 
 设置页还提供完整输入规模阈值、`keep`／`upgrade_only` 超限策略、切换后的保持回合数和缓存感知开关。阈值默认 32,768，保持回合默认 2；`null` 和 `0` 分别禁用阈值与保持规则。输入规模由 dsh token-meter 对系统提示、工具定义、历史和工具结果做完整请求估算，并标注为估算值；无法可靠估算时不会为了省钱降级。供应商未报告缓存字段时显示为未知，显式 `cacheReadTokens: 0` 才表示零命中。
 
@@ -33,7 +35,7 @@ Host 入口是包根导出，Web loader 会依据 `package.json` 的 `dsh.client
 
 ## 路由行为
 
-每个由用户输入开始的 turn 在系统提示组装前最多调用一次 TypeSafe System One（`jev-latest`）。Jev 返回的 provider/model 必须匹配设置页白名单；同一 turn 的工具续步和请求重试沿用已经组装的路线。分类失败、超时、缺凭据或非法选择会沿用当前请求路线，没有当前路线时使用 `defaultModel`。
+每个由用户输入开始的 turn 在系统提示组装前最多调用一次 TypeSafe System One（`jev-latest`，当前 endpoint 为 `https://api.typesafe.ai/v1/systemone`）。插件使用当前 `questions.model` Choice 请求和 `answers.model.choice` 响应，把每个候选模型及其适配器声明的思考档位编码为可追踪的路由选项，再映射回 provider/model。Jev 返回的 provider/model 必须匹配设置页白名单；同一 turn 的工具续步和请求重试沿用已经组装的路线。分类失败、超时、缺少 API Key 或非法选择会沿用当前请求路线，没有当前路线时使用 `defaultModel`。
 
 分类材料只用于 Jev 判断，执行模型仍使用 dsh 完整会话历史。`jevMaxStateChars` 仅限制发往 TypeSafe 的证据序列化长度；它不会裁剪执行上下文。超过阈值时，`keep` 保留当前路线；`upgrade_only` 仅在候选能力档位明确从 economy 升到 capability 时放行升级。切换后的完整用户回合由持久化日志重建，工具 step 不单独计数，失败和取消不计为保持回合。
 
@@ -41,7 +43,7 @@ Host 入口是包根导出，Web loader 会依据 `package.json` 的 `dsh.client
 
 ## 当前票据范围
 
-本版本覆盖逐回合路由、基础候选白名单、默认关闭、凭据引用、设置持久化、长上下文切换守卫、持久化保持计数、缓存证据隔离、思考强度/恢复、可卸载生命周期和可追溯路由指标。真实 ctapi/TypeSafe 验收与固定 Pro 对比记录见 [docs/live-acceptance.md](docs/live-acceptance.md)。没有凭据或网关不可用时，文档中的项目必须保持“未验证”，不能用测试替身替代真实结果。
+本版本覆盖逐回合路由、基础候选白名单、默认关闭、直接 API Key 设置、设置持久化、长上下文切换守卫、持久化保持计数、缓存证据隔离、思考强度/恢复、可卸载生命周期和可追溯路由指标。真实 ctapi/TypeSafe 验收与固定 Pro 对比记录见 [docs/live-acceptance.md](docs/live-acceptance.md)。没有 API Key 或网关不可用时，文档中的项目必须保持“未验证”，不能用测试替身替代真实结果。
 
 ## 诊断记录格式
 
@@ -50,7 +52,7 @@ Host 入口是包根导出，Web loader 会依据 `package.json` 的 `dsh.client
 ## 安装后快速验收
 
 1. 构建并通过 `examples/jev-router.patch.yml` 加载插件。
-2. 在 dsh credentials 中写入 TypeSafe System One 的凭据，并把设置中的 `apiKeyEnv` 设为引用名；设置页只显示引用和配置状态，不读回密钥。
+2. 在 Jev 自动路由设置页的 `apiKey` 密码框中直接填写 TypeSafe System One API Key；不要把密钥写入 `cordis.yml`、日志或截图。
 3. 保持插件关闭发送一条消息，确认没有 Jev 请求；开启插件并把会话切到 Auto，再发送常规问题和复杂工具任务，确认出站请求模型与会话尾部决定一致。
 4. 分别关闭 `showDecision`、`recordMetrics`，确认只影响对应的界面或 logger；再刷新 profile，确认设置仍持久化。
 5. 记录真实模型与固定 Pro 的对比结果，不把模型占比或单价差写成节省结论。完整表格和命令见 [docs/live-acceptance.md](docs/live-acceptance.md)。
