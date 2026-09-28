@@ -1,6 +1,6 @@
 import type { UserConfig } from 'tsdown'
 
-const PLUGIN_ID = '@zong/dsh-jev-router'
+const PLUGIN_ID = '@asi-ai/dsh-jev-router'
 const CLIENT_EXTERNALS = new Set([
   'react',
   'react/jsx-runtime',

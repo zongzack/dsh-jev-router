@@ -38,6 +38,16 @@ function routeEquals(left: ModelSelection, right: ModelSelection): boolean {
   return left.provider === right.provider && left.model === right.model
 }
 
+/** Decide whether the standard model-selection projection needs an automatic route update. */
+export function shouldSyncModelSelection(
+  current: ModelSelection | undefined,
+  actual: ModelSelection,
+  visible: ModelSelection | undefined,
+): boolean {
+  return current === undefined || !routeEquals(current, actual)
+    || (visible !== undefined && !routeEquals(visible, actual))
+}
+
 /** Apply long-context and hold constraints without changing the Jev suggestion. */
 /**
  * @param input - turn snapshot, measured input, and actual route history.

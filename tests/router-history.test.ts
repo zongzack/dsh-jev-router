@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { createAssistantMessage } from '@deepseek-ai/dsh-llm'
 import { SessionSeq, type SessionEvent } from '@deepseek-ai/dsh-session'
 import {
-  cacheEvidenceFor, encodeDecisionCommandArgs, JEV_DECISION_COMMAND, routerHistoryProjectionDefinition,
+  cacheEvidenceFor, encodeDecisionCommandArgs, encodeRouteSyncCommandArgs, JEV_DECISION_COMMAND,
+  JEV_ROUTE_SYNC_COMMAND, routerHistoryProjectionDefinition,
 } from '../src/router-history.ts'
 
 function event<T extends SessionEvent['type']>(
@@ -20,6 +21,30 @@ const assistant = (model: string) => createAssistantMessage({
 })
 
 describe('router history projection', () => {
+  it('keeps Auto mode when an internal route sync updates the standard model selection', () => {
+    let state = routerHistoryProjectionDefinition.init({ id: 'route-sync' } as never, 0 as never)
+    state = routerHistoryProjectionDefinition.apply(state, event('command/run', {
+      commandId: 'auto' as never, name: 'jev-auto', source: { kind: 'user' },
+    }, 0))
+    state = routerHistoryProjectionDefinition.apply(state, event('command/done', {
+      commandId: 'auto' as never, kind: 'success',
+    }, 1))
+    state = routerHistoryProjectionDefinition.apply(state, event('command/run', {
+      commandId: 'sync' as never,
+      name: JEV_ROUTE_SYNC_COMMAND,
+      args: ` ${encodeRouteSyncCommandArgs({ provider: 'ctapi', model: 'flash' })}`,
+      source: { kind: 'user' },
+    }, 2))
+    state = routerHistoryProjectionDefinition.apply(state, event('model/selection', {
+      provider: 'ctapi', model: 'flash',
+    }, 3))
+    expect(routerHistoryProjectionDefinition.wire.view(state)).toMatchObject({ mode: 'auto' })
+    state = routerHistoryProjectionDefinition.apply(state, event('command/done', {
+      commandId: 'sync' as never, kind: 'success',
+    }, 4))
+    expect(routerHistoryProjectionDefinition.wire.view(state)).toMatchObject({ mode: 'auto' })
+  })
+
   it('distinguishes a missing cache report from an explicit zero hit', () => {
     let state = routerHistoryProjectionDefinition.init({} as never, 0 as never)
     state = routerHistoryProjectionDefinition.apply(state, event('assistant/message', {

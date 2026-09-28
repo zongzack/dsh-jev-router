@@ -85,6 +85,7 @@ describe('Jev router Client composition', () => {
         }),
       },
     } as never)
+    ctx.provide('remote.session', {} as never)
     ctx.provide('sessions', {
       scope: (id: SessionId) => id === sessionId ? agentContext : undefined,
       sessionOf: (candidate: Context) => candidate === agentContext ? session : undefined,

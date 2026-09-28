@@ -18,9 +18,12 @@ import {
 } from './config.ts'
 import { boundJevState, classifyWithJev, DEFAULT_JEV_ENDPOINT, type JevDecision } from './jev.ts'
 import { measureCompleteInput } from './input-measurement.ts'
-import { resolveGuardedRoute, type InputMeasurement, type RouteGuardReason } from './route-guards.ts'
 import {
-  cacheEvidenceFor, decodeDecisionCommandArgs, encodeDecisionCommandArgs, JEV_DECISION_COMMAND,
+  resolveGuardedRoute, shouldSyncModelSelection, type InputMeasurement, type RouteGuardReason,
+} from './route-guards.ts'
+import {
+  cacheEvidenceFor, decodeDecisionCommandArgs, decodeRouteSyncCommandArgs, encodeDecisionCommandArgs,
+  encodeRouteSyncCommandArgs, JEV_DECISION_COMMAND, JEV_ROUTE_SYNC_COMMAND,
   routerHistoryProjectionDefinition, routeKey, type RouterHistoryState,
 } from './router-history.ts'
 
@@ -110,6 +113,7 @@ interface RouteState {
   usage?: DecisionReport['usage'] | undefined
   inFlight?: Promise<void> | undefined
   modeCommands: Map<string, boolean>
+  routeSyncCommands: Map<string, Pick<ModelSelection, 'provider' | 'model'>>
 }
 
 interface DecisionReport {
@@ -203,6 +207,20 @@ function sameRoute(
   right: Pick<ModelSelection, 'provider' | 'model'>,
 ): boolean {
   return left.provider === right.provider && left.model === right.model
+}
+
+function visibleModelSelection(
+  ctx: Context,
+  agent: Agent,
+): ModelSelection | undefined {
+  const projected = ctx.sessionProjections.stateOf(agent.session, 'modelSelection')
+  const visible = projected?.pending ?? projected?.lastUsed
+  if (visible === undefined || visible === null) return undefined
+  return {
+    provider: visible.provider,
+    model: visible.model,
+    ...(visible.reasoningEffort === undefined ? {} : { reasoningEffort: ReasoningEffortId(visible.reasoningEffort) }),
+  }
 }
 
 async function settleWithAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -320,6 +338,29 @@ async function persistVisibleDecision(
   }
 }
 
+async function syncVisibleModelSelection(
+  ctx: Context,
+  agent: Agent,
+  route: ModelSelection,
+  signal: AbortSignal,
+  authorize: (rawInput: string | undefined) => void,
+): Promise<void> {
+  if (signal.aborted) return
+  const rawInput = ` ${encodeRouteSyncCommandArgs({
+    provider: route.provider,
+    model: route.model,
+    ...(route.reasoningEffort === undefined ? {} : { reasoningEffort: String(route.reasoningEffort) }),
+  })}`
+  authorize(rawInput)
+  try {
+    await ctx.commands.execute(agent, `/${JEV_ROUTE_SYNC_COMMAND}${rawInput}`, [], signal)
+  } catch (error: unknown) {
+    if (!signal.aborted) ctx.logger.warn(`jev-router: failed to synchronize visible model selection: ${String(error)}`)
+  } finally {
+    authorize(undefined)
+  }
+}
+
 function choiceFromDecision(
   decision: JevDecision,
   candidates: readonly CandidateModel[],
@@ -356,6 +397,7 @@ function installAgent(
   scope: { get(): JevRouterSettings },
   defaultFixed: boolean,
   authorizeDecision: (rawInput: string | undefined) => void,
+  authorizeRouteSync: (rawInput: string | undefined) => void,
   registry?: Set<RouteState>,
 ): () => Promise<void> {
   if (!isRootAgent(agent)) return () => Promise.resolve()
@@ -381,6 +423,7 @@ function installAgent(
   const state: RouteState = {
     claimed: [],
     modeCommands: new Map(),
+    routeSyncCommands: new Map(),
     fixed,
     disposed: false,
     generation: 0,
@@ -433,7 +476,13 @@ function installAgent(
       state.modeCommands.set(String(event.data.commandId), event.data.name === 'jev-fixed')
       return
     }
+    if (event.type === 'command/run' && event.data.name === JEV_ROUTE_SYNC_COMMAND) {
+      const route = decodeRouteSyncCommandArgs(event.data.args)
+      if (route !== undefined) state.routeSyncCommands.set(String(event.data.commandId), route)
+      return
+    }
     if (event.type === 'command/done') {
+      state.routeSyncCommands.delete(String(event.data.commandId))
       const nextFixed = state.modeCommands.get(String(event.data.commandId))
       if (nextFixed === undefined) return
       state.modeCommands.delete(String(event.data.commandId))
@@ -454,6 +503,7 @@ function installAgent(
       return
     }
     if (event.type !== 'model/selection') return
+    if ([...state.routeSyncCommands.values()].some(route => sameRoute(route, event.data))) return
     state.fixed = true
     state.generation++
     state.abort?.abort(new Error('manual model selection'))
@@ -576,6 +626,9 @@ function installAgent(
       state.decision = decision
       state.guardReason = guarded.reason
       state.reasoningSupported = choice.reasoningSupported
+      if (shouldSyncModelSelection(activeRoute, guarded.actual, visibleModelSelection(ctx, agent))) {
+        await syncVisibleModelSelection(ctx, agent, guarded.actual, controller.signal, authorizeRouteSync)
+      }
       await persistVisibleDecision(ctx, agent, state, controller.signal, authorizeDecision)
     } catch (error) {
       if (!controller.signal.aborted || timedOut) {
@@ -607,6 +660,9 @@ function installAgent(
         state.decision = { provider: fallback.provider, model: fallback.model, reason: `fallback: ${String(error)}` }
         state.guardReason = 'fallback'
         state.reasoningSupported = undefined
+        if (shouldSyncModelSelection(activeRoute, state.route, visibleModelSelection(ctx, agent))) {
+          await syncVisibleModelSelection(ctx, agent, state.route, fallbackController.signal, authorizeRouteSync)
+        }
         await persistVisibleDecision(ctx, agent, state, fallbackController.signal, authorizeDecision)
       }
     } finally {
@@ -651,7 +707,7 @@ export function apply(ctx: Context, config: Config = {}): void {
   const disposeHistory = ctx.sessionProjections.register(routerHistoryProjectionDefinition)
   const settings = ctx.settings.register('jev-router', JevRouterSettingsSchema, { base, validate: validateSettings })
   ctx.commands.register({
-    definitionId: CommandDefinitionId('@zong/dsh-jev-router/auto'),
+    definitionId: CommandDefinitionId('@asi-ai/dsh-jev-router/auto'),
     name: 'jev-auto',
     description: 'Return this session to Jev automatic routing',
     recordInput: false,
@@ -661,8 +717,9 @@ export function apply(ctx: Context, config: Config = {}): void {
     },
   })
   const authorizedDecisions = new WeakMap<Agent, string>()
+  const authorizedRouteSyncs = new WeakMap<Agent, string>()
   ctx.commands.register({
-    definitionId: CommandDefinitionId('@zong/dsh-jev-router/fixed'),
+    definitionId: CommandDefinitionId('@asi-ai/dsh-jev-router/fixed'),
     name: 'jev-fixed',
     description: 'Keep this session on its current model route',
     recordInput: false,
@@ -672,7 +729,27 @@ export function apply(ctx: Context, config: Config = {}): void {
     },
   })
   ctx.commands.register({
-    definitionId: CommandDefinitionId('@zong/dsh-jev-router/decision'),
+    definitionId: CommandDefinitionId('@asi-ai/dsh-jev-router/route-sync'),
+    name: JEV_ROUTE_SYNC_COMMAND,
+    description: 'Synchronize the visible model selection with the applied automatic route',
+    recordInput: true,
+    handler: ({ agent, rawInput }) => {
+      const authorized = authorizedRouteSyncs.get(agent)
+      authorizedRouteSyncs.delete(agent)
+      const route = decodeRouteSyncCommandArgs(rawInput)
+      if (!isRootAgent(agent) || authorized !== rawInput || route === undefined) {
+        return { kind: 'error', text: 'Invalid Jev route synchronization record.' }
+      }
+      agent.session.append('model/selection', {
+        provider: route.provider,
+        model: route.model,
+        ...(route.reasoningEffort === undefined ? {} : { reasoningEffort: ReasoningEffortId(route.reasoningEffort) }),
+      })
+      return { kind: 'success' }
+    },
+  })
+  ctx.commands.register({
+    definitionId: CommandDefinitionId('@asi-ai/dsh-jev-router/decision'),
     name: JEV_DECISION_COMMAND,
     description: 'Record an applied Jev route decision',
     recordInput: true,
@@ -698,6 +775,10 @@ export function apply(ctx: Context, config: Config = {}): void {
       rawInput => {
         if (rawInput === undefined) authorizedDecisions.delete(agent)
         else authorizedDecisions.set(agent, rawInput)
+      },
+      rawInput => {
+        if (rawInput === undefined) authorizedRouteSyncs.delete(agent)
+        else authorizedRouteSyncs.set(agent, rawInput)
       },
       states,
     )

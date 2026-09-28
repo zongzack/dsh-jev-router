@@ -46,6 +46,8 @@ export interface JevRouterHistoryView {
 
 /** Internal standard command used to persist an informational route decision. */
 export const JEV_DECISION_COMMAND = 'jev-router-decision'
+/** Internal command that mirrors an automatic route into the standard model-selection projection. */
+export const JEV_ROUTE_SYNC_COMMAND = 'jev-router-route-sync'
 
 const routeSchema = z.object({
   provider: z.string().min(1),
@@ -100,6 +102,7 @@ const historyViewSchema = z.object({
 const commandIntentSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('mode'), mode: z.union([z.literal('auto'), z.literal('fixed')]), commandFixed: z.boolean() }).strict(),
   z.object({ kind: z.literal('decision'), decision: decisionViewSchema }).strict(),
+  z.object({ kind: z.literal('route-sync'), route: routeSchema }).strict(),
 ])
 
 /** Cache evidence for one exact provider/model route. */
@@ -159,6 +162,33 @@ export function decodeDecisionCommandArgs(args: string | undefined): JevRouterDe
   }
 }
 
+/** Encode an automatic route for the internal model-selection synchronization command. */
+export function encodeRouteSyncCommandArgs(route: { provider: string; model: string; reasoningEffort?: string }): string {
+  return JSON.stringify(route)
+}
+
+/** Decode one internally authorized automatic route synchronization payload. */
+export function decodeRouteSyncCommandArgs(
+  args: string | undefined,
+): { provider: string; model: string; reasoningEffort?: string } | undefined {
+  if (args === undefined) return undefined
+  try {
+    const parsed = z.object({
+      provider: z.string().min(1),
+      model: z.string().min(1),
+      reasoningEffort: z.string().min(1).optional(),
+    }).strict().safeParse(JSON.parse(args.trim()))
+    if (!parsed.success) return undefined
+    return {
+      provider: parsed.data.provider,
+      model: parsed.data.model,
+      ...(parsed.data.reasoningEffort === undefined ? {} : { reasoningEffort: parsed.data.reasoningEffort }),
+    }
+  } catch {
+    return undefined
+  }
+}
+
 /** Stable storage key for one exact provider/model route. */
 /**
  * @param provider - registered provider route.
@@ -199,7 +229,7 @@ export function cacheEvidenceFor(
 /** Host-only durable-history projection shared by every routed main session. */
 export const routerHistoryProjectionDefinition = {
   key: 'jevRouterHistory',
-  stateVersion: 4,
+  stateVersion: 5,
   stateSchema: routerHistoryStateSchema,
   init: (header, _inheritedEventCount): RouterHistoryState => ({
     sessionId: String(header.id),
@@ -238,6 +268,18 @@ export const routerHistoryProjectionDefinition = {
             },
           }
     }
+    if (event.type === 'command/run' && event.data.name === JEV_ROUTE_SYNC_COMMAND) {
+      const route = decodeRouteSyncCommandArgs(event.data.args)
+      return route === undefined
+        ? state
+        : {
+            ...state,
+            commandIntents: {
+              ...state.commandIntents,
+              [event.data.commandId]: { kind: 'route-sync', route },
+            },
+          }
+    }
     if (event.type === 'command/done') {
       const intent = state.commandIntents[event.data.commandId]
       if (intent === undefined) return state
@@ -252,6 +294,7 @@ export const routerHistoryProjectionDefinition = {
           view: viewWithMode(state, intent.mode),
         }
       }
+      if (intent.kind === 'route-sync') return { ...state, commandIntents: remaining }
       return {
         ...state,
         commandIntents: remaining,
@@ -259,6 +302,9 @@ export const routerHistoryProjectionDefinition = {
       }
     }
     if (event.type === 'model/selection') {
+      const automatic = Object.values(state.commandIntents).some(intent => intent.kind === 'route-sync'
+        && sameRoute(intent.route, event.data))
+      if (automatic) return state
       return { ...state, mode: 'fixed', commandFixed: false, view: viewWithMode(state, 'fixed') }
     }
     if (event.type === 'turn/start') return { ...state, openTurn: event.data.turn }

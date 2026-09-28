@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import vm from 'node:vm'
 
-const PLUGIN_ID = '@zong/dsh-jev-router'
+const PLUGIN_ID = '@asi-ai/dsh-jev-router'
 const bundleUrl = new URL('../lib/client.js', import.meta.url)
 const source = await readFile(bundleUrl, 'utf8')
 let registration

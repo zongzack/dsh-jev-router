@@ -1,11 +1,18 @@
 import { describe, expect, it } from 'vitest'
-import { resolveGuardedRoute } from '../src/route-guards.ts'
+import { resolveGuardedRoute, shouldSyncModelSelection } from '../src/route-guards.ts'
 import { defaultSettings } from '../src/config.ts'
 
 const FLASH = { provider: 'ctapi', model: 'deepseek-v4-flash-vip' } as const
 const PRO = { provider: 'ctapi', model: 'deepseek-v4-pro-vip' } as const
 
 describe('route switching guards', () => {
+  it('syncs a stale visible selection without repeating an already aligned route', () => {
+    expect(shouldSyncModelSelection(FLASH, FLASH, PRO)).toBe(true)
+    expect(shouldSyncModelSelection(PRO, FLASH, PRO)).toBe(true)
+    expect(shouldSyncModelSelection(FLASH, FLASH, FLASH)).toBe(false)
+    expect(shouldSyncModelSelection(FLASH, FLASH, undefined)).toBe(false)
+  })
+
   it('allows an ordinary downgrade at the limit and blocks it above the limit', () => {
     const settings = {
       ...defaultSettings(PRO),

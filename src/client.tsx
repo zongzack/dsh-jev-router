@@ -247,6 +247,25 @@ export function JevRouterCard(props: CardProps) {
     padding: 0,
     border: 0,
   } as const
+  const buttonStyle = (enabled: boolean, prominence: 'primary' | 'secondary') => ({
+    alignSelf: 'flex-start',
+    border: prominence === 'primary'
+      ? '1px solid transparent'
+      : '1px solid var(--dsw-alias-border-l2)',
+    borderRadius: 8,
+    padding: '5px 14px',
+    font: 'inherit',
+    fontSize: 13,
+    lineHeight: 1.5,
+    cursor: enabled ? 'pointer' : 'default',
+    background: prominence === 'primary'
+      ? 'var(--dsw-alias-button-primary-fill)'
+      : 'var(--dsw-alias-bg-module-platform)',
+    color: prominence === 'primary'
+      ? 'var(--dsw-alias-label-primary-inverted)'
+      : 'var(--dsw-alias-label-secondary)',
+    opacity: enabled ? 1 : 0.4,
+  } as const)
   return (
     <form style={{ display: 'flex', flexDirection: 'column' }} onSubmit={event => {
       event.preventDefault()
@@ -313,12 +332,12 @@ export function JevRouterCard(props: CardProps) {
             : catalogStatus === 'error'
               ? <div role="alert" style={{ ...hintStyle, display: 'flex', alignItems: 'center', gap: 8 }}>
                   <span>{props.t('catalogError')}: {catalogError}</span>
-                  <button type="button" onClick={loadCatalog}>{props.t('catalogRetry')}</button>
+                  <button type="button" style={buttonStyle(true, 'secondary')} onClick={loadCatalog}>{props.t('catalogRetry')}</button>
                 </div>
               : routes.length === 0
                 ? <div role="status" style={{ ...hintStyle, display: 'flex', alignItems: 'center', gap: 8 }}>
                     <span>{props.t('catalogEmpty')}</span>
-                    <button type="button" onClick={loadCatalog}>{props.t('catalogRetry')}</button>
+                    <button type="button" style={buttonStyle(true, 'secondary')} onClick={loadCatalog}>{props.t('catalogRetry')}</button>
                   </div>
                 : <div role="group" aria-labelledby="jev-candidates-label" aria-describedby="jev-candidates-hint" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                     {catalog?.failures.length ? <p role="status" style={hintStyle}>{props.t('catalogPartial')}</p> : null}
@@ -328,7 +347,7 @@ export function JevRouterCard(props: CardProps) {
                       return <div key={`${id}:${String(index)}`} style={{ padding: 10, border: '0.5px solid var(--dsw-alias-border-l3)', borderRadius: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
                         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 8, alignItems: 'center' }}>
                           <label htmlFor={`jev-candidate-model-${String(index)}`} style={labelStyle}>{props.t('candidates')} {index + 1}</label>
-                          <button type="button" disabled={!state.writable || candidateModels.length <= 1} aria-label={`${props.t('removeCandidate')} ${id}`} onClick={() => setDraft(previous => ({
+                          <button type="button" disabled={!state.writable || candidateModels.length <= 1} style={buttonStyle(state.writable && candidateModels.length > 1, 'secondary')} aria-label={`${props.t('removeCandidate')} ${id}`} onClick={() => setDraft(previous => ({
                             ...previous,
                             candidateModels: candidateModels.filter((_, candidateIndex) => candidateIndex !== index),
                           }))}>{props.t('removeCandidate')}</button>
@@ -372,7 +391,7 @@ export function JevRouterCard(props: CardProps) {
                         }))} />
                       </div>
                     })}
-                    <button type="button" disabled={!state.writable || candidateModels.length >= routes.length} onClick={() => {
+                    <button type="button" disabled={!state.writable || candidateModels.length >= routes.length} style={buttonStyle(state.writable && candidateModels.length < routes.length, 'secondary')} onClick={() => {
                       const existing = new Set(candidateModels.map(routeId))
                       const next = routes.find(route => !existing.has(routeId({ provider: route.provider.id, model: route.model.id })))
                       if (next === undefined) return
@@ -494,7 +513,7 @@ export function JevRouterCard(props: CardProps) {
         </div>
       </details>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingTop: 16 }}>
-        <button type="submit" disabled={!state.writable} style={{ border: '1px solid transparent', borderRadius: 8, padding: '5px 14px', font: 'inherit', fontSize: 13, lineHeight: 1.5, cursor: state.writable ? 'pointer' : 'default', background: 'var(--dsw-alias-label-primary)', color: 'var(--dsw-alias-bg-layer-3)', opacity: state.writable ? 1 : 0.4 }}>{props.t('save')}</button>
+        <button type="submit" disabled={!state.writable} style={buttonStyle(state.writable, 'primary')}>{props.t('save')}</button>
         {message ? <span role="status" style={hintStyle}>{message}</span> : null}
       </div>
     </form>

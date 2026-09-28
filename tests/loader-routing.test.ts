@@ -120,7 +120,7 @@ async function loadRouter(options: {
     "- name: '@deepseek-ai/dsh-agent-loop'",
     '  config:',
     '    agents: []',
-    "- name: '@zong/dsh-jev-router'",
+    "- name: '@asi-ai/dsh-jev-router'",
     '  config:',
     "    endpoint: 'https://jev.invalid/test'",
     "    apiKey: 'secret'",
@@ -148,7 +148,7 @@ async function loadRouter(options: {
     ['@deepseek-ai/dsh-commands', Commands],
     ['@deepseek-ai/dsh-token-meter', TokenMeter],
     ['@deepseek-ai/dsh-agent-loop', AgentLoop],
-    ['@zong/dsh-jev-router', JevRouter],
+    ['@asi-ai/dsh-jev-router', JevRouter],
   ])
   context.loader.internal = {
     version: 'v2',
@@ -194,6 +194,17 @@ describe('real Loader routing composition', () => {
     await agent.whenIdle()
     expect(classifications).toBe(1)
     expect(adapter.requests[1]?.model).toBe('deepseek-v4-flash-vip')
+    expect(agent.session.snapshotEvents()).toContainEqual(expect.objectContaining({
+      type: 'model/selection',
+      data: expect.objectContaining({ provider: 'ctapi', model: 'deepseek-v4-flash-vip' }),
+    }))
+    expect(ctx.sessionProjections.stateOf(agent.session, 'jevRouterHistory')?.mode).toBe('auto')
+
+    agent.followup(createUserMessage({ content: [{ type: 'text', text: 'remain on the automatic route' }], source: { kind: 'user' } }))
+    await agent.whenIdle()
+    expect(classifications).toBe(2)
+    expect(adapter.requests[2]?.model).toBe('deepseek-v4-flash-vip')
+    expect(agent.session.snapshotEvents().filter(event => event.type === 'model/selection')).toHaveLength(1)
   })
 
   it('saves guard settings, routes the final request, and isolates cache evidence per session', async () => {
@@ -745,7 +756,7 @@ describe('real Loader routing composition', () => {
     })
     agent.followup(createUserMessage({ content: [{ type: 'text', text: 'enter fallback' }], source: { kind: 'user' } }))
     const fallbackSignal = await fallbackStarted.promise
-    const entry = [...ctx.loader.entries()].find(candidate => candidate.options.name === '@zong/dsh-jev-router')
+    const entry = [...ctx.loader.entries()].find(candidate => candidate.options.name === '@asi-ai/dsh-jev-router')
     expect(entry).toBeDefined()
 
     await entry?._dispose()
@@ -776,7 +787,7 @@ describe('real Loader routing composition', () => {
     const agent = await ctx.agentLoop.create(SessionId('hmr'), { provider: 'ctapi', model: 'deepseek-v4-pro-vip' })
     agent.followup(createUserMessage({ content: [{ type: 'text', text: 'pending' }], source: { kind: 'user' } }))
     const signal = await started.promise
-    const entry = [...ctx.loader.entries()].find(candidate => candidate.options.name === '@zong/dsh-jev-router')
+    const entry = [...ctx.loader.entries()].find(candidate => candidate.options.name === '@asi-ai/dsh-jev-router')
     expect(entry).toBeDefined()
     await entry?._dispose()
     expect(signal.aborted).toBe(true)
@@ -812,7 +823,7 @@ describe('real Loader routing composition', () => {
     expect(ctx.sessionProjections.stateOf(agent.session, 'jevRouterHistory')?.latestDecision)
       .toMatchObject({ jevVersion: 'jev-replay', actual: { model: 'deepseek-v4-flash-vip' } })
 
-    const entry = [...ctx.loader.entries()].find(candidate => candidate.options.name === '@zong/dsh-jev-router')
+    const entry = [...ctx.loader.entries()].find(candidate => candidate.options.name === '@asi-ai/dsh-jev-router')
     expect(entry).toBeDefined()
     await entry?._dispose()
     expect(ctx.sessionProjections.stateOf(agent.session, 'jevRouterHistory')).toBeUndefined()

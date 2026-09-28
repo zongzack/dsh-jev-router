@@ -1,5 +1,5 @@
 {
-  "name": "@zong/dsh-jev-router",
+  "name": "@asi-ai/dsh-jev-router",
   "version": "0.1.1",
   "description": "Per-turn Jev model routing plugin for DeepSeek Harness",
   "license": "MIT",

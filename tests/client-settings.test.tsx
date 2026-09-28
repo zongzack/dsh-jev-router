@@ -90,12 +90,13 @@ describe('Jev router settings card', () => {
 
   it('loads candidates from the configured model catalog and blocks stale routes', async () => {
     const value = defaultSettings({ provider: 'ctapi', model: 'deepseek-v4-pro-vip' })
+    const snapshot = { value, writable: true }
     const mutate = vi.fn(async () => {})
     const props = {
       view: 'full',
       t: (key: string) => key,
       settings: {
-        getSnapshot: () => ({ value, writable: true }),
+        getSnapshot: () => snapshot,
         subscribe: () => () => {},
         mutate,
         set: vi.fn(async () => {}),
